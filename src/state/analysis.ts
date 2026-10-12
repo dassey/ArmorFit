@@ -1,7 +1,6 @@
 import { effect } from '@preact/signals';
 import { clearanceColor } from '../core/fit/heatmap';
-import type { Remote } from '../workers/rpc';
-import type { FitWorkerApi } from '../workers/fit.worker';
+import type { FitPool } from './fitPool';
 import { orientationMatrix, type PieceManager } from './pieceManager';
 import { pieces, updatePiece } from './pieces';
 import { clearance, view } from './store';
@@ -12,13 +11,13 @@ export class AnalysisManager {
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private versions = new Map<string, number>();
   private clearanceCache = new Map<string, Float32Array>();
-  private registered = new Set<string>();
+  private registered = new Map<string, Set<number>>();
 
   constructor(
-    private readonly fit: Remote<FitWorkerApi>,
+    private readonly pool: FitPool,
     private readonly pm: PieceManager,
   ) {
-    pm.onGeometry = (id) => void this.register(id);
+    pm.onGeometry = (id) => void this.refresh(id);
     pm.onChanged = (id) => this.schedule(id);
     effect(() => {
       void clearance.value;
@@ -30,18 +29,31 @@ export class AnalysisManager {
     });
   }
 
-  private async register(id: string): Promise<void> {
+  private workerFor(id: string): number {
+    return this.pool.indexOf(id, this.pm.members(id));
+  }
+
+  private async refresh(id: string): Promise<void> {
+    const stale = this.registered.get(id);
+    this.registered.delete(id);
+    if (stale) for (const w of stale) void this.pool.workers[w].removePiece(id);
+    await this.ensure(id, this.workerFor(id));
+    if (this.pm.get(id)?.placement) this.schedule(id);
+  }
+
+  private async ensure(id: string, w: number): Promise<void> {
+    if (this.registered.get(id)?.has(w)) return;
     const p = this.pm.get(id);
     const rt = this.pm.runtime(id);
     if (!p || !rt) return;
-    await this.fit.setPiece(
+    await this.pool.workers[w].setPiece(
       id,
       rt.preview.positions.slice(),
       rt.preview.indices.slice(),
       orientationMatrix(p).elements.slice(),
     );
-    this.registered.add(id);
-    if (p.placement) this.schedule(id);
+    if (!this.registered.has(id)) this.registered.set(id, new Set());
+    this.registered.get(id)!.add(w);
   }
 
   schedule(id: string, delay = 120): void {
@@ -49,7 +61,9 @@ export class AnalysisManager {
     const p = this.pm.get(id);
     if (!p) {
       this.clearanceCache.delete(id);
-      void this.fit.removePiece(id);
+      for (const w of this.registered.get(id) ?? []) void this.pool.workers[w].removePiece(id);
+      this.registered.delete(id);
+      this.pool.release(id);
       return;
     }
     if (!p.placement) {
@@ -66,13 +80,14 @@ export class AnalysisManager {
   }
 
   private async run(id: string): Promise<void> {
-    if (!this.registered.has(id)) await this.register(id);
+    const w = this.workerFor(id);
+    await this.ensure(id, w);
     const inputs = this.pm.analysisInputs(id);
     if (!inputs) return;
     const version = (this.versions.get(id) ?? 0) + 1;
     this.versions.set(id, version);
     try {
-      const res = await this.fit.analyze(
+      const res = await this.pool.workers[w].analyze(
         id,
         inputs.world.elements.slice(),
         clearance.value,
@@ -96,8 +111,9 @@ export class AnalysisManager {
   ): Promise<{ before: number; after: number; scale: number[]; moved: number } | null> {
     const inp = this.pm.autoSizeInputs(id);
     if (!inp) return null;
-    for (const m of inp.ids) if (!this.registered.has(m)) await this.register(m);
-    const res = await this.fit.autoSize(
+    const w = this.pool.indexOf(inp.ids[0], inp.ids);
+    await Promise.all(inp.ids.map((m) => this.ensure(m, w)));
+    const res = await this.pool.workers[w].autoSize(
       inp.ids,
       inp.placement.elements.slice(),
       inp.direction,
@@ -119,16 +135,27 @@ export class AnalysisManager {
 
   async autoSizeAll(): Promise<number> {
     const seen = new Set<string>();
-    let n = 0;
+    const lanes = new Map<number, string[]>();
     for (const p of pieces.peek()) {
       if (!p.placement || seen.has(p.id)) continue;
-      for (const m of this.pm.members(p.id)) seen.add(m);
-      try {
-        if (await this.autoSize(p.id, 'uniform')) n++;
-      } catch {
-        continue;
-      }
+      const members = this.pm.members(p.id);
+      for (const m of members) seen.add(m);
+      const w = this.pool.indexOf(p.id, members);
+      if (!lanes.has(w)) lanes.set(w, []);
+      lanes.get(w)!.push(p.id);
     }
+    let n = 0;
+    await Promise.all(
+      [...lanes.values()].map(async (ids) => {
+        for (const id of ids) {
+          try {
+            if (await this.autoSize(id, 'uniform')) n++;
+          } catch {
+            continue;
+          }
+        }
+      }),
+    );
     return n;
   }
 

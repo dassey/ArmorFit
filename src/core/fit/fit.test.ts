@@ -11,6 +11,8 @@ import { clearanceStats, measureClearance, DEFAULT_CLEARANCE, withAllowance } fr
 import { clearanceColor } from './heatmap';
 import { drivingMeasurements, regionTally } from './regionTally';
 import { settleOffset } from './settle';
+import { prepareAnalysisPiece, representatives, vertexClearance } from './analyze';
+import { makeHelmet } from '../testmeshes/pieces';
 
 function cylinderBody(regionTop: number, regionBottom: number) {
   const m = cylinder(50, 400, 96);
@@ -142,5 +144,54 @@ describe('settings and colours', () => {
     expect(red[0]).toBeGreaterThan(red[1]);
     expect(green[1]).toBeGreaterThan(green[0]);
     expect(blue[2]).toBeGreaterThan(blue[0]);
+  });
+});
+
+describe('heatmap representatives', () => {
+  it('keeps small meshes exact and thins large ones without mixing inner and outer surfaces', () => {
+    const helmet = makeHelmet({ segments: 200 });
+    const normals = computeVertexNormals(helmet);
+    const n = helmet.positions.length / 3;
+    const small = representatives(helmet.positions, normals, n + 1);
+    expect(small.reps.length).toBe(n);
+    const r = representatives(helmet.positions, normals, 4000);
+    expect(r.reps.length).toBeLessThan(5200);
+    expect(r.reps.length).toBeGreaterThan(2000);
+    let opposite = 0;
+    for (let i = 0; i < n; i++) {
+      const j = r.reps[r.repOf[i]];
+      const d =
+        normals[i * 3] * normals[j * 3] +
+        normals[i * 3 + 1] * normals[j * 3 + 1] +
+        normals[i * 3 + 2] * normals[j * 3 + 2];
+      if (d < 0) opposite++;
+    }
+    expect(opposite / n).toBeLessThan(0.01);
+  });
+
+  it('gives every vertex a clearance close to its own', () => {
+    const m = cylinder(50, 600, 96);
+    const regions = new Uint8Array(m.positions.length / 3).fill(encodeRegion('forearm', 1));
+    const body = new BodyQuery(m.positions, computeVertexNormals(m), m.indices, regions);
+    const tube = makeShell({
+      surface: (u, v) => [62 * Math.sin(u * 2 * Math.PI), (v - 0.5) * 200, 62 * Math.cos(u * 2 * Math.PI)],
+      uSegments: 220,
+      vSegments: 120,
+      uPeriodic: true,
+      thickness: 3,
+    });
+    const piece = prepareAnalysisPiece(tube, new Matrix4());
+    expect(piece.reps.length).toBeLessThan(piece.positions.length / 3);
+    const values = vertexClearance(piece, new Matrix4(), body);
+    let inner = 0;
+    for (let i = 0; i < values.length; i++) {
+      if (Number.isNaN(values[i])) continue;
+      const r = Math.hypot(piece.positions[i * 3], piece.positions[i * 3 + 2]);
+      if (r < 62.5) {
+        expect(Math.abs(values[i] - (r - 50))).toBeLessThan(1.5);
+        inner++;
+      }
+    }
+    expect(inner).toBeGreaterThan(1000);
   });
 });

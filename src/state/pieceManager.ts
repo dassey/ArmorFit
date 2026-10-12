@@ -110,6 +110,9 @@ export class PieceManager {
 
   private kits = new Map<string, KitInfo>();
   private importCount = 0;
+  private batching = 0;
+  private thumbQueue = new Set<string>();
+  private thumbScheduled = false;
 
   constructor(
     private readonly vp: Viewport,
@@ -146,10 +149,17 @@ export class PieceManager {
     const budgetFor = (f: File) =>
       Math.round(Math.min(PREVIEW_MAX, Math.max(PREVIEW_MIN, (PREVIEW_BUDGET * f.size) / totalBytes)));
     const queue = [...files].sort((a, b) => b.size - a.size);
-    const workers = this.pool();
+    const workers = this.pool().slice(0, files.length);
     const added: string[] = [];
-    const results = new Map<File, PreparedImport[]>();
+    const order = new Map<string, number>();
+    const adoptions: Promise<void>[] = [];
     importBusy.value++;
+    this.batching++;
+    let held = true;
+    const release = () => {
+      if (held) this.batching--;
+      held = false;
+    };
     importProgress.value = { done: 0, total: files.length };
     const run = async (w: Remote<GeometryWorkerApi>) => {
       for (let file = queue.shift(); file; file = queue.shift()) {
@@ -159,7 +169,22 @@ export class PieceManager {
           for (const warn of res.warnings) toast(`${file.name}: ${warn}`, 'error', 6000);
           if (res.pieces.length > 1)
             toast(`${file.name}: ${res.pieces.length} objects imported as separate pieces.`);
-          results.set(file, res.pieces);
+          for (const prep of res.pieces) {
+            const id = `f${++this.importCount}`;
+            const keep = { positions: prep.preview.positions.slice(), indices: prep.preview.indices.slice() };
+            adoptions.push(
+              this.geo.adopt(
+                id,
+                transfer(prep.full, [
+                  prep.full.positions.buffer as ArrayBuffer,
+                  prep.full.indices.buffer as ArrayBuffer,
+                ]),
+                transfer(keep, [keep.positions.buffer as ArrayBuffer, keep.indices.buffer as ArrayBuffer]),
+              ),
+            );
+            order.set(id, files.indexOf(file) * 1000 + res.pieces.indexOf(prep));
+            if (this.addImported({ ...prep, id })) added.push(id);
+          }
         } catch (e) {
           toast(`${file.name}: ${e instanceof Error ? e.message : String(e)}`, 'error', 7000);
         } finally {
@@ -169,23 +194,21 @@ export class PieceManager {
     };
     try {
       await Promise.all(workers.map(run));
-      for (const file of files) {
-        for (const prep of results.get(file) ?? []) {
-          const id = `f${++this.importCount}`;
-          const keep = { positions: prep.preview.positions.slice(), indices: prep.preview.indices.slice() };
-          await this.geo.adopt(
-            id,
-            transfer(prep.full, [
-              prep.full.positions.buffer as ArrayBuffer,
-              prep.full.indices.buffer as ArrayBuffer,
-            ]),
-            transfer(keep, [keep.positions.buffer as ArrayBuffer, keep.indices.buffer as ArrayBuffer]),
-          );
-          if (this.addImported({ ...prep, id })) added.push(id);
-        }
-      }
+      await Promise.all(adoptions);
+      const rank = (id: string) => order.get(id) ?? -1;
+      pieces.value = [
+        ...pieces.value.filter((p) => !order.has(p.id)),
+        ...pieces.value.filter((p) => order.has(p.id)).sort((x, y) => rank(x.id) - rank(y.id)),
+      ];
+      added.sort((a, b) => rank(a) - rank(b));
+      release();
       if (added.length > 1) this.detectKits(added);
+      for (const id of added) {
+        this.refreshThumbnail(id);
+        this.onGeometry(id);
+      }
     } finally {
+      release();
       importBusy.value--;
       importProgress.value = { done: 0, total: 0 };
     }
@@ -227,8 +250,6 @@ export class PieceManager {
           side: m.type ? (m.side ?? (pieceType(m.type).sided ? p.side : null)) : p.side,
         });
         this.refreshSamples(m.id);
-        this.refreshThumbnail(m.id);
-        this.onGeometry(m.id);
       }
       toast(
         kit.kind === 'body'
@@ -353,8 +374,10 @@ export class PieceManager {
     this.runtimes.set(imp.id, rt);
     pieces.value = [...pieces.value, state];
     this.refreshSamples(imp.id);
-    this.refreshThumbnail(imp.id);
-    this.onGeometry(imp.id);
+    if (!this.batching) {
+      this.refreshThumbnail(imp.id);
+      this.onGeometry(imp.id);
+    }
     return !this.reattach(imp.id);
   }
 
@@ -418,6 +441,28 @@ export class PieceManager {
   }
 
   refreshThumbnail(id: string): void {
+    this.thumbQueue.add(id);
+    if (this.thumbScheduled) return;
+    this.thumbScheduled = true;
+    const idle =
+      typeof requestIdleCallback === 'function'
+        ? (cb: (d?: IdleDeadline) => void) => requestIdleCallback(cb, { timeout: 200 })
+        : (cb: (d?: IdleDeadline) => void) => setTimeout(cb, 16);
+    const run = (deadline?: IdleDeadline) => {
+      let done = 0;
+      for (const next of this.thumbQueue) {
+        if (done > 0 && (!deadline || deadline.timeRemaining() < 6)) break;
+        this.thumbQueue.delete(next);
+        this.drawThumbnail(next);
+        done++;
+      }
+      if (this.thumbQueue.size) idle(run);
+      else this.thumbScheduled = false;
+    };
+    idle(run);
+  }
+
+  private drawThumbnail(id: string): void {
     const p = this.get(id);
     const rt = this.runtimes.get(id);
     if (!p || !rt) return;

@@ -8,12 +8,19 @@ import type { FitWorkerApi } from '../workers/fit.worker';
 import type { GeometryWorkerApi } from '../workers/geometry.worker';
 import { wrap, type Remote } from '../workers/rpc';
 import { AnalysisManager } from './analysis';
+import { FitPool } from './fitPool';
 import { PieceManager } from './pieceManager';
 import { selectedId } from './pieces';
 import { body, clearance, profile, view } from './store';
 
+function workerCount(): number {
+  const cores = navigator.hardwareConcurrency || 2;
+  const memory = (navigator as unknown as { deviceMemory?: number }).deviceMemory ?? 4;
+  return Math.max(1, Math.min(memory >= 8 ? 8 : 4, cores - 2));
+}
+
 export class AppController {
-  readonly fit: Remote<FitWorkerApi>;
+  readonly fit: FitPool;
   readonly geo: Remote<GeometryWorkerApi>;
   viewport: Viewport | null = null;
   pieces: PieceManager | null = null;
@@ -28,8 +35,12 @@ export class AppController {
   private poolWorkers: Remote<GeometryWorkerApi>[] | null = null;
 
   constructor() {
-    this.fit = wrap<FitWorkerApi>(
-      new Worker(new URL('../workers/fit.worker.ts', import.meta.url), { type: 'module' }),
+    this.fit = new FitPool(
+      () =>
+        wrap<FitWorkerApi>(
+          new Worker(new URL('../workers/fit.worker.ts', import.meta.url), { type: 'module' }),
+        ),
+      workerCount(),
     );
     this.geo = wrap<GeometryWorkerApi>(
       new Worker(new URL('../workers/geometry.worker.ts', import.meta.url), { type: 'module' }),
@@ -38,7 +49,7 @@ export class AppController {
 
   importPool(): Remote<GeometryWorkerApi>[] {
     if (!this.poolWorkers) {
-      const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+      const n = workerCount();
       this.poolWorkers = Array.from({ length: n }, () =>
         wrap<GeometryWorkerApi>(
           new Worker(new URL('../workers/geometry.worker.ts', import.meta.url), { type: 'module' }),

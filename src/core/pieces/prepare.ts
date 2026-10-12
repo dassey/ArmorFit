@@ -1,7 +1,7 @@
 import type { ImportedPart } from '../io/types';
 import { decimate } from '../mesh/decimate';
 import { computeVertexNormals } from '../mesh/normals';
-import { analyzeTopology, fixWinding, type TopologyReport } from '../mesh/topology';
+import { repairWinding, type TopologyReport } from '../mesh/topology';
 import { boundsSize, computeBounds, type MeshData } from '../mesh/types';
 import { weldVertices } from '../mesh/weld';
 import type { FileUnit } from '../units';
@@ -55,8 +55,7 @@ export async function preparePiece(
   const warnings: string[] = [];
   const welded = weldVertices(part.mesh);
   const full = welded.mesh;
-  const flipped = fixWinding(full);
-  const topology = analyzeTopology(full);
+  const { flipped, report: topology } = repairWinding(full);
   if (topology.triangles === 0) throw new Error(`"${part.name}" contains no triangles.`);
   if (!topology.watertight) {
     const parts: string[] = [];

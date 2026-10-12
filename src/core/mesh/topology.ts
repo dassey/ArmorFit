@@ -221,75 +221,104 @@ export function surfaceArea(mesh: MeshData): number {
   return s;
 }
 
-export function fixWinding(mesh: MeshData): number {
+function windingPass(mesh: MeshData, et: EdgeTable): { flips: number; inconsistent: number } {
   const { indices } = mesh;
+  const p = mesh.positions;
   const nf = indices.length / 3;
-  const et = buildEdgeTable(mesh);
+  const edgeOf = new Int32Array(indices.length).fill(-1);
+  for (let e = 0; e < et.nEdges; e++) {
+    edgeOf[et.he0[e]] = e;
+    if (et.he1[e] >= 0) edgeOf[et.he1[e]] = e;
+  }
+  for (let h = 0; h < indices.length; h++) {
+    if (edgeOf[h] < 0) {
+      edgeOf[h] = et.find(indices[h], halfEdgeTo(indices, h));
+    }
+  }
+  const orient = new Uint8Array(nf);
   const visited = new Uint8Array(nf);
-  const flipped = new Uint8Array(nf);
-  let flips = 0;
   const queue = new Int32Array(nf);
-
-  const flip = (f: number) => {
-    const t = indices[f * 3 + 1];
-    indices[f * 3 + 1] = indices[f * 3 + 2];
-    indices[f * 3 + 2] = t;
-    flipped[f] ^= 1;
-  };
-
-  const compFaces: number[][] = [];
+  let qt = 0;
   for (let seed = 0; seed < nf; seed++) {
     if (visited[seed]) continue;
-    const faces: number[] = [];
-    let qh = 0;
-    let qt = 0;
+    const start = qt;
+    let qh = qt;
     queue[qt++] = seed;
     visited[seed] = 1;
     while (qh < qt) {
       const f = queue[qh++];
-      faces.push(f);
       for (let k = 0; k < 3; k++) {
-        const a = indices[f * 3 + k];
-        const b = indices[f * 3 + ((k + 1) % 3)];
-        const e = et.find(a, b);
+        const h = f * 3 + k;
+        const e = edgeOf[h];
         if (e < 0 || et.count[e] !== 2) continue;
-        const h0 = et.he0[e];
-        const h1 = et.he1[e];
-        const other = ((h0 / 3) | 0) === f ? (h1 / 3) | 0 : (h0 / 3) | 0;
-        if (other === f || visited[other]) continue;
-        let sameDir = false;
-        for (let j = 0; j < 3; j++) {
-          const oa = indices[other * 3 + j];
-          const ob = indices[other * 3 + ((j + 1) % 3)];
-          if (oa === a && ob === b) sameDir = true;
-        }
-        if (sameDir) {
-          flip(other);
-          flips++;
-        }
-        visited[other] = 1;
-        queue[qt++] = other;
+        const other = et.he0[e] === h ? et.he1[e] : et.he0[e];
+        const g = (other / 3) | 0;
+        if (g === f || visited[g]) continue;
+        const sameOrig = indices[other] === indices[h] ? 1 : 0;
+        orient[g] = orient[f] ^ sameOrig;
+        visited[g] = 1;
+        queue[qt++] = g;
       }
     }
-    compFaces.push(faces);
-  }
-
-  for (const faces of compFaces) {
     let v = 0;
-    const p = mesh.positions;
-    for (const f of faces) {
-      const a = indices[f * 3] * 3;
-      const b = indices[f * 3 + 1] * 3;
-      const c = indices[f * 3 + 2] * 3;
-      v +=
-        p[a] * (p[b + 1] * p[c + 2] - p[b + 2] * p[c + 1]) -
-        p[a + 1] * (p[b] * p[c + 2] - p[b + 2] * p[c]) +
-        p[a + 2] * (p[b] * p[c + 1] - p[b + 1] * p[c]);
+    for (let q = start; q < qt; q++) {
+      const f = queue[q];
+      const ia = indices[f * 3] * 3;
+      const ib = indices[f * 3 + 1] * 3;
+      const ic = indices[f * 3 + 2] * 3;
+      const c =
+        p[ia] * (p[ib + 1] * p[ic + 2] - p[ib + 2] * p[ic + 1]) -
+        p[ia + 1] * (p[ib] * p[ic + 2] - p[ib + 2] * p[ic]) +
+        p[ia + 2] * (p[ib] * p[ic + 1] - p[ib + 1] * p[ic]);
+      v += orient[f] ? -c : c;
     }
-    if (v < 0) {
-      for (const f of faces) flip(f);
-      flips += faces.length;
-    }
+    if (v < 0) for (let q = start; q < qt; q++) orient[queue[q]] ^= 1;
   }
-  return flips;
+  let inconsistent = 0;
+  for (let e = 0; e < et.nEdges; e++) {
+    if (et.count[e] !== 2) continue;
+    const h0 = et.he0[e];
+    const h1 = et.he1[e];
+    const sameOrig = indices[h0] === indices[h1] ? 1 : 0;
+    if ((sameOrig ^ orient[(h0 / 3) | 0] ^ orient[(h1 / 3) | 0]) === 1) inconsistent++;
+  }
+  let flips = 0;
+  for (let f = 0; f < nf; f++) {
+    if (!orient[f]) continue;
+    const t = indices[f * 3 + 1];
+    indices[f * 3 + 1] = indices[f * 3 + 2];
+    indices[f * 3 + 2] = t;
+    flips++;
+  }
+  return { flips, inconsistent };
+}
+
+export function fixWinding(mesh: MeshData): number {
+  return windingPass(mesh, buildEdgeTable(mesh)).flips;
+}
+
+export function repairWinding(mesh: MeshData): { flipped: number; report: TopologyReport } {
+  const et = buildEdgeTable(mesh);
+  const { flips, inconsistent } = windingPass(mesh, et);
+  let boundary = 0;
+  let nonManifold = 0;
+  for (let e = 0; e < et.nEdges; e++) {
+    const c = et.count[e];
+    if (c === 1) boundary++;
+    else if (c > 2) nonManifold++;
+  }
+  const comps = triangleComponents(mesh);
+  return {
+    flipped: flips,
+    report: {
+      vertices: mesh.positions.length / 3,
+      triangles: mesh.indices.length / 3,
+      edges: et.nEdges,
+      boundaryEdges: boundary,
+      nonManifoldEdges: nonManifold,
+      inconsistentEdges: inconsistent,
+      components: comps.count,
+      watertight: boundary === 0 && nonManifold === 0 && inconsistent === 0,
+    },
+  };
 }

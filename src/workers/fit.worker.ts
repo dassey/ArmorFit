@@ -100,15 +100,21 @@ const api = {
   ): AutoSizeResult {
     const parts = ids.map((id) => analysisPieces.get(id)).filter(Boolean) as AnalysisPiece[];
     if (!parts.length || !query) throw new Error('Piece or body not ready');
+    const total = parts.reduce((n, p) => n + p.samplePoints.length / 3, 0);
+    const stride = Math.max(1, Math.ceil(total / 6000));
     const join = (key: 'samplePoints' | 'sampleNormals') => {
-      if (parts.length === 1) return parts[0][key];
-      const out = new Float32Array(parts.reduce((n, p) => n + p[key].length, 0));
+      if (parts.length === 1 && stride === 1) return parts[0][key];
+      const out = new Float32Array(Math.ceil(total / stride) * 3 + 3 * parts.length);
       let o = 0;
       for (const p of parts) {
-        out.set(p[key], o);
-        o += p[key].length;
+        const src = p[key];
+        for (let i = 0; i < src.length / 3; i += stride) {
+          out[o++] = src[i * 3];
+          out[o++] = src[i * 3 + 1];
+          out[o++] = src[i * 3 + 2];
+        }
       }
-      return out;
+      return out.subarray(0, o);
     };
     const shiftAxes: [boolean, boolean, boolean] | undefined =
       mode === 'offset'

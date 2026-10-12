@@ -3,7 +3,14 @@ import { makeForearmTube, makeHelmet, makePauldron, makeChestPlate } from '../te
 import { cube } from '../testmeshes/primitives';
 import { computeVertexNormals } from './normals';
 import { sampleSurface } from './sample';
-import { analyzeTopology, boundaryLoops, fixWinding, signedVolume, surfaceArea } from './topology';
+import {
+  analyzeTopology,
+  boundaryLoops,
+  fixWinding,
+  repairWinding,
+  signedVolume,
+  surfaceArea,
+} from './topology';
 import type { MeshData } from './types';
 import { compactVertices, unweld, weldVertices } from './weld';
 
@@ -145,5 +152,23 @@ describe('computeVertexNormals', () => {
     for (let i = 1; i < m.positions.length / 3; i++)
       if (m.positions[i * 3 + 1] > m.positions[top * 3 + 1]) top = i;
     expect(n[top * 3 + 1]).toBeGreaterThan(0.95);
+  });
+
+  it('repairWinding fixes winding and reports the same topology as a separate check', () => {
+    for (const make of [makeHelmet, makePauldron, makeChestPlate]) {
+      const a = weldVertices(make()).mesh;
+      for (let f = 0; f < a.indices.length / 3; f += 7) {
+        const t = a.indices[f * 3 + 1];
+        a.indices[f * 3 + 1] = a.indices[f * 3 + 2];
+        a.indices[f * 3 + 2] = t;
+      }
+      const b = { positions: a.positions, indices: a.indices.slice() };
+      const r = repairWinding(a);
+      fixWinding(b);
+      expect(r.report).toEqual(analyzeTopology(b));
+      expect(r.report.watertight).toBe(true);
+      expect(r.flipped).toBeGreaterThan(0);
+      expect(signedVolume(a)).toBeGreaterThan(0);
+    }
   });
 });

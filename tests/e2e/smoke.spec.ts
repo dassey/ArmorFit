@@ -156,6 +156,77 @@ test('assembles a set of files that share one layout and sizes it', async ({ pag
   expect(errors).toEqual([]);
 });
 
+test('exposes the app to AI agents through WebMCP', async ({ page }) => {
+  await page.addInitScript(() => {
+    const tools = new Map<string, { execute: (i: unknown) => Promise<unknown>; annotations?: object }>();
+    Object.defineProperty(document, 'modelContext', {
+      value: {
+        registerTool: (
+          tool: { name: string; execute: (i: unknown) => Promise<unknown> },
+          opts?: { signal?: AbortSignal },
+        ) => {
+          tools.set(tool.name, tool);
+          opts?.signal?.addEventListener('abort', () => tools.delete(tool.name));
+          return Promise.resolve();
+        },
+      },
+    });
+    (window as unknown as { __tools: typeof tools }).__tools = tools;
+  });
+  const errors = await open(page);
+  const call = (name: string, input: object = {}) =>
+    page.evaluate(
+      async ([n, i]) => {
+        const t = (
+          window as unknown as {
+            __tools: Map<string, { execute: (x: unknown) => Promise<{ content: { text: string }[] }> }>;
+          }
+        ).__tools.get(n as string);
+        if (!t) throw new Error(`missing tool ${n}`);
+        const r = await t.execute(i);
+        const txt = r.content[0].text;
+        try {
+          return JSON.parse(txt);
+        } catch {
+          return txt;
+        }
+      },
+      [name, input] as const,
+    );
+  const names = await page.evaluate(() => [
+    ...(window as unknown as { __tools: Map<string, unknown> }).__tools.keys(),
+  ]);
+  expect(names).toEqual(
+    expect.arrayContaining([
+      'armorfit_get_status',
+      'armorfit_put_on_body',
+      'armorfit_auto_size',
+      'armorfit_sizing_report',
+    ]),
+  );
+  const s0 = await call('armorfit_get_status');
+  expect(s0.pieces).toEqual([]);
+  const s1 = await call('armorfit_set_measurements', { values: { height: 182, chest: 104 }, unit: 'cm' });
+  expect(s1.measurementsMm.height).toBeCloseTo(1820, 0);
+  expect(s1.enteredByUser).toEqual(expect.arrayContaining(['height', 'chest']));
+  await call('armorfit_load_demo_armor');
+  const placed = await call('armorfit_put_on_body');
+  expect(placed.pieces).toHaveLength(4);
+  expect(placed.pieces.every((p: { onBody: boolean }) => p.onBody)).toBe(true);
+  const bracer = placed.pieces.find((p: { name: string }) => p.name === 'Demo bracer L');
+  const sized = await call('armorfit_auto_size', { ids: [bracer.id] });
+  const after = sized.pieces.find((p: { id: string }) => p.id === bracer.id);
+  expect(after.scalePercent[0]).not.toBe(100);
+  const d = await call('armorfit_get_piece', { id: 'Demo bracer L' });
+  expect(d.fit.covers[0].region).toContain('Forearm');
+  const report = await call('armorfit_sizing_report');
+  expect(report).toContain('# ArmorFit sizing report');
+  await call('armorfit_show', { tab: 'armor', id: bracer.id });
+  await expect(page.locator('.piece-card')).toHaveCount(4);
+  await expect(page.locator('.piece-card.selected')).toContainText('Demo bracer L');
+  expect(errors).toEqual([]);
+});
+
 test('re-fits the mannequin and remembers measurements', async ({ page }) => {
   const errors = await open(page);
   const height = page.locator('input#m-height');
