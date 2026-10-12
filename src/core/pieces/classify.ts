@@ -19,6 +19,56 @@ export function tokenize(fileName: string): string[] {
 }
 
 const LEFT = new Set(['l', 'left', 'lft', 'lh', 'lhs', 'izq', 'izquierda', 'gauche', 'links']);
+const BACK_FIRST = new Set<PieceTypeId>(['chest', 'pauldron', 'abdomen', 'gorget']);
+
+const DETAIL_WORDS = new Set([
+  'detail',
+  'details',
+  'vent',
+  'vents',
+  'buckle',
+  'trim',
+  'insert',
+  'inserts',
+  'lens',
+  'tacpad',
+  'strap',
+  'straps',
+  'clip',
+  'clips',
+  'pin',
+  'pins',
+  'emblem',
+  'logo',
+  'badge',
+  'decal',
+  'greeble',
+  'greebles',
+  'light',
+  'lights',
+  'bolt',
+  'bolts',
+  'rivet',
+  'rivets',
+  'button',
+  'buttons',
+  'antenna',
+  'accent',
+  'ornament',
+  'stand',
+  'hinge',
+  'latch',
+  'magnet',
+  'connector',
+  'key',
+  'peg',
+  'pegs',
+]);
+
+export function isDetailPart(fileName: string): boolean {
+  return tokenize(fileName).some((t) => DETAIL_WORDS.has(t));
+}
+
 const RIGHT = new Set(['r', 'right', 'rgt', 'rt', 'rh', 'rhs', 'der', 'derecha', 'droite', 'rechts']);
 
 export function guessFromFileName(fileName: string): NameGuess {
@@ -46,6 +96,9 @@ export function guessFromFileName(fileName: string): NameGuess {
         best = { id: type.id, score, word: kw };
       }
     }
+  }
+  if (best && (tokens[0] === 'back' || tokens[0] === 'rear') && BACK_FIRST.has(best.id)) {
+    best = { id: 'back', score: 0.9, word: tokens[0] };
   }
   if (!best) return { type: null, side, confidence: 0 };
   return { type: best.id, side, confidence: best.score, matchedWord: best.word };

@@ -10,11 +10,14 @@ export interface AutoSizeOptions {
   anisotropyWeight?: number;
   category?: 'shell' | 'tube' | 'cap';
   iterations?: number;
+  shiftAxes?: [boolean, boolean, boolean];
+  excludeSide?: 1 | 2;
 }
 
 export interface AutoSizeResult {
   scale: [number, number, number];
   offset: number;
+  shift: Vec3;
   before: ClearanceStats;
   after: ClearanceStats;
   iterations: number;
@@ -37,7 +40,8 @@ export function autoSize(
   const uniform = opts.mode === 'uniform';
   const offsetOnly = opts.mode === 'offset';
   const scaleCols = offsetOnly ? 0 : uniform ? 1 : 3;
-  const nParams = scaleCols + (direction ? 1 : 0);
+  const shiftIdx = offsetOnly ? [] : [0, 1, 2].filter((k) => opts.shiftAxes?.[k]);
+  const nParams = scaleCols + shiftIdx.length + (direction ? 1 : 0);
   if (nParams === 0) {
     const st = clearanceStats(
       measureClearance(
@@ -53,14 +57,17 @@ export function autoSize(
       ),
       settings,
     );
-    return { scale: [...startScale], offset: 0, before: st, after: st, iterations: 0 };
+    return { scale: [...startScale], offset: 0, shift: [0, 0, 0], before: st, after: st, iterations: 0 };
   }
   const aniso = opts.anisotropyWeight ?? 6;
 
   let scale: [number, number, number] = [...startScale];
   let offset = 0;
+  const shift: Vec3 = [0, 0, 0];
   const matrixFor = (s: [number, number, number], off: number) => {
     const m = new Matrix4().makeScale(mx * s[0], s[1], s[2]);
+    if (shift[0] || shift[1] || shift[2])
+      m.premultiply(new Matrix4().makeTranslation(shift[0], shift[1], shift[2]));
     m.premultiply(placement);
     if (direction && off)
       m.premultiply(
@@ -68,8 +75,10 @@ export function autoSize(
       );
     return m;
   };
-  const evaluate = (s: [number, number, number], off: number) =>
-    measureClearance(piece.samplePoints, piece.sampleNormals, matrixFor(s, off), body, 200);
+  const evaluate = (s: [number, number, number], off: number) => {
+    const all = measureClearance(piece.samplePoints, piece.sampleNormals, matrixFor(s, off), body, 200);
+    return opts.excludeSide ? all.filter((x) => (x.region & 3) !== opts.excludeSide) : all;
+  };
 
   const before = clearanceStats(evaluate(scale, 0), settings);
   const iterations = opts.iterations ?? 20;
@@ -99,6 +108,7 @@ export function autoSize(
         : uniform
           ? [dS[0] * scale[0] + dS[1] * scale[1] + dS[2] * scale[2]]
           : dS;
+      for (const k of shiftIdx) row.push(n[0] * axes[k][0] + n[1] * axes[k][1] + n[2] * axes[k][2]);
       if (direction) row.push(n[0] * direction[0] + n[1] * direction[1] + n[2] * direction[2]);
       const c = smp.clearance;
       const contact = c <= c40 ? 1 : Math.exp(-(c - c40) / 20);
@@ -122,13 +132,18 @@ export function autoSize(
       row[k] = 0.5 * wN * 100;
       reg.push({ row, r: 0 });
     }
+    shiftIdx.forEach((k, j) => {
+      const row = new Array(nParams).fill(0);
+      row[scaleCols + j] = 0.05 * wN;
+      reg.push({ row, r: -shift[k] * 0.05 * wN });
+    });
     if (opts.category === 'shell') {
       const beta = 40 * wN;
       for (let k = 0; k < scaleCols; k++) {
         const row = new Array(nParams).fill(0);
         row[k] = beta * (uniform ? scale[0] : 1);
         const cur = uniform ? scale[0] : scale[k];
-        const start = uniform ? startScale[0] : startScale[k];
+        const start = 1;
         reg.push({ row, r: -(cur - start) * beta * (uniform ? 1 : 1) });
       }
     }
@@ -157,6 +172,12 @@ export function autoSize(
         maxStep = Math.max(maxStep, Math.abs(step));
       }
     }
+    shiftIdx.forEach((k, j) => {
+      const step = Math.min(15, Math.max(-15, delta[scaleCols + j]));
+      const next = Math.min(80, Math.max(-80, shift[k] + step));
+      maxStep = Math.max(maxStep, Math.abs(next - shift[k]) / 100);
+      shift[k] = next;
+    });
     if (direction) {
       const dOff = Math.min(40, Math.max(-40, delta[nParams - 1]));
       offset += dOff;
@@ -181,5 +202,13 @@ export function autoSize(
     } else break;
   }
   const after = clearanceStats(evaluate(scale, offset), settings);
-  return { scale, offset, before, after, iterations: it };
+  if (badness(after) > badness(before) + 0.01) {
+    return { scale: [...startScale], offset: 0, shift: [0, 0, 0], before, after: before, iterations: it };
+  }
+  return { scale, offset, shift, before, after, iterations: it };
+}
+
+function badness(s: ClearanceStats): number {
+  if (!s.count) return Infinity;
+  return s.intersecting * 3 + s.tight + s.loose * 0.3;
 }

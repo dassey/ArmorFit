@@ -9,6 +9,7 @@ import type { PieceCategory } from './types';
 export interface OrientationHints {
   category?: PieceCategory;
   openingDown?: boolean;
+  wrapsVertical?: boolean;
 }
 
 export interface Opening {
@@ -103,6 +104,59 @@ function fileUpPrior(normal: Vec3): { up: Vec3; strength: number } {
     if (s > best.strength + 0.05) best = { up: v3.norm(t), strength: s };
   }
   return best;
+}
+
+function verticalWrap(pts: Float32Array, size: number): { up: Vec3; inward: Vec3 } | null {
+  const axes: Vec3[] = [
+    [0, 0, 1],
+    [0, 1, 0],
+  ];
+  let best: { up: Vec3; inward: Vec3; rel: number } | null = null;
+  const n = pts.length / 3;
+  for (const a of axes) {
+    const helper: Vec3 = Math.abs(a[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+    const u = v3.norm(v3.cross(a, helper));
+    const w = v3.cross(a, u);
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const t = pts[i * 3] * a[0] + pts[i * 3 + 1] * a[1] + pts[i * 3 + 2] * a[2];
+      lo = Math.min(lo, t);
+      hi = Math.max(hi, t);
+    }
+    const bands = 6;
+    const xy: number[][] = Array.from({ length: bands }, () => []);
+    for (let i = 0; i < n; i++) {
+      const p: Vec3 = [pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]];
+      const k = Math.min(bands - 1, Math.floor(((v3.dot(p, a) - lo) / (hi - lo || 1)) * bands));
+      xy[k].push(v3.dot(p, u), v3.dot(p, w));
+    }
+    let relSum = 0;
+    let used = 0;
+    let dir: Vec3 = [0, 0, 0];
+    for (const band of xy) {
+      if (band.length < 40) continue;
+      const c = fitCircle2D(band);
+      if (!c || c.radius > size * 2 || c.radius < size * 0.1) continue;
+      let mx = 0;
+      let my = 0;
+      for (let i = 0; i < band.length; i += 2) {
+        mx += band[i];
+        my += band[i + 1];
+      }
+      mx /= band.length / 2;
+      my /= band.length / 2;
+      const h = v3.add(v3.scale(u, c.cx - mx), v3.scale(w, c.cy - my));
+      if (v3.len(h) < size * 0.03) continue;
+      dir = v3.add(dir, v3.norm(h));
+      relSum += c.rms / c.radius;
+      used++;
+    }
+    if (used < 3 || v3.len(dir) < used * 0.5) continue;
+    const rel = relSum / used;
+    if (!best || rel < best.rel) best = { up: a, inward: v3.norm(dir), rel };
+  }
+  return best && best.rel < 0.25 ? { up: best.up, inward: best.inward } : null;
 }
 
 function orthonormalFrame(up: Vec3, front: Vec3): [Vec3, Vec3, Vec3] {
@@ -249,7 +303,11 @@ export function autoOrient(mesh: MeshData, hints: OrientationHints = {}): Orient
     );
   } else {
     let inward: Vec3;
-    if (sphereOk) {
+    const wrap = hints.wrapsVertical ? verticalWrap(pts, size) : null;
+    if (wrap) {
+      inward = wrap.inward;
+      reasons.push('Wraps around a vertical axis: the concave side faces the body.');
+    } else if (sphereOk) {
       inward = v3.norm(v3.sub(center, centroid));
       reasons.push('Concave side (centre of curvature) faces the body.');
     } else {
@@ -258,7 +316,7 @@ export function autoOrient(mesh: MeshData, hints: OrientationHints = {}): Orient
       reasons.push('Piece is nearly flat: which side faces the body is a guess.');
     }
     const outward = v3.scale(inward, -1);
-    const prior = fileUpPrior(outward);
+    const prior = wrap ? { up: wrap.up, strength: 1 } : fileUpPrior(outward);
     if (prior.strength > 0.85) {
       up = prior.up;
       reasons.push('Up direction taken from the file’s own axes.');

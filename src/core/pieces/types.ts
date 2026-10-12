@@ -74,7 +74,7 @@ export const PIECE_TYPES: PieceTypeInfo[] = [
     regions: ['upperBack', 'lowerBack'],
     measurements: ['chest', 'shoulderWidth', 'torsoLength'],
     typicalSize: 420,
-    keywords: ['back', 'backplate', 'backpiece', 'spine'],
+    keywords: ['back', 'backplate', 'backpiece', 'spine', 'kidney', 'rear'],
   },
   {
     id: 'abdomen',

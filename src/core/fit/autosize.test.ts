@@ -90,4 +90,56 @@ describe('autoSize', () => {
     expect(r.offset).toBeLessThan(-20);
     expect(Math.abs(r.after.median - DEFAULT_CLEARANCE.target)).toBeLessThan(3);
   });
+
+  it('re-centres an off-centre tube instead of only growing it', () => {
+    const piece = prepareAnalysisPiece(tube(62, 200), new Matrix4(), 2000);
+    const placement = new Matrix4().makeTranslation(14, 0, 0);
+    const r = autoSize(piece, placement, null, [1, 1, 1], false, b, DEFAULT_CLEARANCE, {
+      mode: 'uniform',
+      category: 'tube',
+      shiftAxes: [true, false, true],
+    });
+    expect(r.before.intersecting).toBeGreaterThan(0);
+    expect(r.after.intersecting).toBe(0);
+    expect(r.shift[0]).toBeLessThan(-10);
+    expect(Math.abs(r.shift[1])).toBe(0);
+    expect(r.scale[0]).toBeLessThan(1.02);
+  });
+
+  it('ignores contact with the other side of the body', () => {
+    const legL = cylinder(50, 600, 96);
+    const legR = cylinder(50, 600, 96);
+    const n = legL.positions.length;
+    const positions = new Float32Array(n * 2);
+    for (let i = 0; i < n; i += 3) {
+      positions.set([legL.positions[i] + 52, legL.positions[i + 1], legL.positions[i + 2]], i);
+      positions.set([legR.positions[i] - 52, legR.positions[i + 1], legR.positions[i + 2]], n + i);
+    }
+    const indices = new Uint32Array(legL.indices.length * 2);
+    indices.set(legL.indices);
+    for (let i = 0; i < legR.indices.length; i++) indices[legL.indices.length + i] = legR.indices[i] + n / 3;
+    const regions = new Uint8Array((n / 3) * 2);
+    regions.fill(encodeRegion('thigh', 1), 0, n / 3);
+    regions.fill(encodeRegion('thigh', 2), n / 3);
+    const legs = new BodyQuery(positions, computeVertexNormals({ positions, indices }), indices, regions);
+    const piece = prepareAnalysisPiece(tube(64, 200), new Matrix4(), 2000);
+    const placement = new Matrix4().makeTranslation(52, 0, 0);
+    const opts = { mode: 'uniform' as const, category: 'tube' as const };
+    const both = autoSize(piece, placement, null, [1, 1, 1], false, legs, DEFAULT_CLEARANCE, opts);
+    const own = autoSize(piece, placement, null, [1, 1, 1], false, legs, DEFAULT_CLEARANCE, {
+      ...opts,
+      excludeSide: 2,
+    });
+    expect(own.scale[0]).toBeLessThan(1);
+    expect(both.scale[0]).toBeGreaterThan(own.scale[0]);
+  });
+
+  it('never returns a worse fit than it started with', () => {
+    const piece = prepareAnalysisPiece(tube(58, 200), new Matrix4(), 2000);
+    const r = autoSize(piece, new Matrix4(), null, [1, 1, 1], false, b, DEFAULT_CLEARANCE, {
+      mode: 'uniform',
+    });
+    const bad = (s: typeof r.after) => s.intersecting * 3 + s.tight + s.loose * 0.3;
+    expect(bad(r.after)).toBeLessThanOrEqual(bad(r.before) + 0.01);
+  });
 });

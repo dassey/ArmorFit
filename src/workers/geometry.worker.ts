@@ -25,6 +25,16 @@ const previews = new Map<string, MeshData>();
 const previewHulls = new Map<string, Float64Array>();
 let nextId = 1;
 
+export interface PreparedImport {
+  name: string;
+  fileName: string;
+  fileHash: string;
+  full: { positions: Float32Array; indices: Uint32Array };
+  preview: { positions: Float32Array; indices: Uint32Array; normals: Float32Array };
+  prepared: Omit<PreparedPiece, 'full' | 'preview'>;
+  fullTriangles: number;
+}
+
 export interface PieceImport {
   id: string;
   name: string;
@@ -79,6 +89,58 @@ const DEMOS = {
 export type DemoKind = keyof typeof DEMOS;
 
 const api = {
+  async prepareFile(
+    fileName: string,
+    buffer: ArrayBuffer,
+    previewTriangles: number,
+  ): Promise<{ pieces: PreparedImport[]; warnings: string[] }> {
+    const hash = await sha256(buffer);
+    const parsed = parseMeshFile(fileName, buffer);
+    const declared =
+      parsed.declaredUnit && ['mm', 'cm', 'm', 'in'].includes(parsed.declaredUnit)
+        ? (parsed.declaredUnit as FileUnit)
+        : undefined;
+    const per = Math.max(10_000, Math.floor(previewTriangles / Math.max(1, parsed.parts.length)));
+    const out: PreparedImport[] = [];
+    const list: Transferable[] = [];
+    for (const part of parsed.parts) {
+      const p = await preparePiece(part, fileName, declared, per);
+      const { full, preview, ...rest } = p;
+      const shared = preview.positions.buffer === full.positions.buffer;
+      const item: PreparedImport = {
+        name: p.name,
+        fileName,
+        fileHash: hash,
+        full: { positions: full.positions, indices: full.indices },
+        preview: {
+          positions: shared ? preview.positions.slice() : preview.positions,
+          indices: shared ? preview.indices.slice() : preview.indices,
+          normals: preview.normals!,
+        },
+        prepared: rest,
+        fullTriangles: full.indices.length / 3,
+      };
+      out.push(item);
+      list.push(
+        item.full.positions.buffer as ArrayBuffer,
+        item.full.indices.buffer as ArrayBuffer,
+        item.preview.positions.buffer as ArrayBuffer,
+        item.preview.indices.buffer as ArrayBuffer,
+        item.preview.normals.buffer as ArrayBuffer,
+      );
+    }
+    return transfer({ pieces: out, warnings: parsed.warnings }, [...new Set(list)]);
+  },
+
+  adopt(
+    id: string,
+    full: { positions: Float32Array; indices: Uint32Array },
+    preview: { positions: Float32Array; indices: Uint32Array },
+  ): void {
+    fullMeshes.set(id, full);
+    previews.set(id, preview);
+  },
+
   async importFile(
     fileName: string,
     buffer: ArrayBuffer,

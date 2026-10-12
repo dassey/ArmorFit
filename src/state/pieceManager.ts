@@ -9,6 +9,8 @@ import {
   type BodyGeometry,
   type PlacementSpec,
 } from '../core/fit/placement';
+import { kitPlacements } from '../core/fit/kitPlacement';
+import { detectKits, kitOrientation, type KitInfo } from '../core/pieces/kit';
 import { settleOffset } from '../core/fit/settle';
 import { DEFAULT_CLEARANCE, type ClearanceSettings } from '../core/fit/clearance';
 import { v3, type Vec3 } from '../core/math/linalg';
@@ -20,7 +22,8 @@ import { PieceView } from '../engine/PieceView';
 import type { Ray3 } from '../engine/Interaction';
 import type { Viewport } from '../engine/Viewport';
 import type { Remote } from '../workers/rpc';
-import type { DemoKind, GeometryWorkerApi, PieceImport } from '../workers/geometry.worker';
+import type { DemoKind, GeometryWorkerApi, PieceImport, PreparedImport } from '../workers/geometry.worker';
+import { transfer } from '../workers/rpc';
 import type { ProjectPiece } from '../core/export/project';
 import {
   pieces,
@@ -28,6 +31,7 @@ import {
   selectedId,
   updatePiece,
   importBusy,
+  importProgress,
   type PieceState,
   type Placement,
 } from './pieces';
@@ -50,6 +54,9 @@ interface PieceRuntime {
 }
 
 const SNAP_DISTANCE = 90;
+const PREVIEW_BUDGET = 2_500_000;
+const PREVIEW_MIN = 20_000;
+const PREVIEW_MAX = 100_000;
 const DRAG_SAMPLES = 180;
 
 export function orientationMatrix(p: Pick<PieceState, 'orientation' | 'unitScale'>): Matrix4 {
@@ -101,10 +108,25 @@ export class PieceManager {
   onChanged: (id: string) => void = () => {};
   onGeometry: (id: string) => void = () => {};
 
+  private kits = new Map<string, KitInfo>();
+  private importCount = 0;
+
   constructor(
     private readonly vp: Viewport,
     private readonly geo: Remote<GeometryWorkerApi>,
+    private readonly pool: () => Remote<GeometryWorkerApi>[] = () => [geo],
   ) {}
+
+  kitOf(id: string): KitInfo | undefined {
+    const k = this.get(id)?.kit;
+    return k ? this.kits.get(k) : undefined;
+  }
+
+  members(id: string): string[] {
+    const p = this.get(id);
+    if (!p?.group) return [id];
+    return pieces.value.filter((q) => q.group === p.group).map((q) => q.id);
+  }
 
   get(id: string): PieceState | undefined {
     return pieces.value.find((p) => p.id === id);
@@ -119,21 +141,156 @@ export class PieceManager {
   }
 
   async importFiles(files: File[]): Promise<void> {
-    for (const file of files) {
-      importBusy.value++;
-      try {
-        const buf = await file.arrayBuffer();
-        const res = await this.geo.importFile(file.name, buf);
-        for (const w of res.warnings) toast(`${file.name}: ${w}`, 'error', 6000);
-        for (const imp of res.pieces) this.addImported(imp);
-        if (res.pieces.length > 1)
-          toast(`${file.name}: ${res.pieces.length} objects imported as separate pieces.`);
-      } catch (e) {
-        toast(`${file.name}: ${e instanceof Error ? e.message : String(e)}`, 'error', 7000);
-      } finally {
-        importBusy.value--;
+    if (!files.length) return;
+    const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
+    const budgetFor = (f: File) =>
+      Math.round(Math.min(PREVIEW_MAX, Math.max(PREVIEW_MIN, (PREVIEW_BUDGET * f.size) / totalBytes)));
+    const queue = [...files].sort((a, b) => b.size - a.size);
+    const workers = this.pool();
+    const added: string[] = [];
+    const results = new Map<File, PreparedImport[]>();
+    importBusy.value++;
+    importProgress.value = { done: 0, total: files.length };
+    const run = async (w: Remote<GeometryWorkerApi>) => {
+      for (let file = queue.shift(); file; file = queue.shift()) {
+        try {
+          const buf = await file.arrayBuffer();
+          const res = await w.prepareFile(file.name, transfer(buf, [buf]), budgetFor(file));
+          for (const warn of res.warnings) toast(`${file.name}: ${warn}`, 'error', 6000);
+          if (res.pieces.length > 1)
+            toast(`${file.name}: ${res.pieces.length} objects imported as separate pieces.`);
+          results.set(file, res.pieces);
+        } catch (e) {
+          toast(`${file.name}: ${e instanceof Error ? e.message : String(e)}`, 'error', 7000);
+        } finally {
+          importProgress.value = { done: importProgress.value.done + 1, total: files.length };
+        }
       }
+    };
+    try {
+      await Promise.all(workers.map(run));
+      for (const file of files) {
+        for (const prep of results.get(file) ?? []) {
+          const id = `f${++this.importCount}`;
+          const keep = { positions: prep.preview.positions.slice(), indices: prep.preview.indices.slice() };
+          await this.geo.adopt(
+            id,
+            transfer(prep.full, [
+              prep.full.positions.buffer as ArrayBuffer,
+              prep.full.indices.buffer as ArrayBuffer,
+            ]),
+            transfer(keep, [keep.positions.buffer as ArrayBuffer, keep.indices.buffer as ArrayBuffer]),
+          );
+          if (this.addImported({ ...prep, id })) added.push(id);
+        }
+      }
+      if (added.length > 1) this.detectKits(added);
+    } finally {
+      importBusy.value--;
+      importProgress.value = { done: 0, total: 0 };
     }
+  }
+
+  private detectKits(ids: string[]): void {
+    const inputs = ids
+      .map((id) => ({ p: this.get(id), rt: this.runtimes.get(id) }))
+      .filter((x) => x.p && x.rt)
+      .map(({ p, rt }) => ({
+        id: p!.id,
+        name: p!.name,
+        type: p!.type,
+        side: p!.guess.side,
+        confidence: p!.guess.confidence,
+        mesh: rt!.preview,
+      }));
+    let kits: KitInfo[];
+    try {
+      kits = detectKits(inputs);
+    } catch (e) {
+      toast(`Could not analyse the set: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      return;
+    }
+    for (const kit of kits) {
+      this.kits.set(kit.id, kit);
+      for (const m of kit.members) {
+        const p = this.get(m.id);
+        if (!p) continue;
+        updatePiece(m.id, {
+          unitScale: kit.unitScale,
+          unitConfirmed: !kit.units.needsConfirmation,
+          units: kit.units,
+          orientation: kitOrientation(kit, m.id, p.orientation),
+          orientationConfirmed: true,
+          kit: kit.id,
+          group: m.group,
+          type: m.type ?? p.type,
+          side: m.type ? (m.side ?? (pieceType(m.type).sided ? p.side : null)) : p.side,
+        });
+        this.refreshSamples(m.id);
+        this.refreshThumbnail(m.id);
+        this.onGeometry(m.id);
+      }
+      toast(
+        kit.kind === 'body'
+          ? `Assembled set found: ${kit.members.length} pieces share one layout. Use “Put all on body” to assemble it.`
+          : `${kit.name}: ${kit.members.length} parts fit together and move as one.`,
+        'info',
+        7000,
+      );
+    }
+  }
+
+  placeKit(kitId: string, only?: Set<string>): boolean {
+    const kit = this.kits.get(kitId);
+    if (!kit || !this.body) return false;
+    const specs = kitPlacements(kit, this.body);
+    const done = new Set<string>();
+    for (const m of kit.members) {
+      if (only && !only.has(m.id)) continue;
+      const p = this.get(m.id);
+      const spec = specs.get(m.id);
+      if (!p || !spec || done.has(m.id)) continue;
+      if (p.kit !== kitId) continue;
+      for (const id of this.members(m.id)) done.add(id);
+      this.getRt(m.id).autoOffset = 0;
+      this.applyPlacement(m.id, spec);
+      this.changed(m.id);
+    }
+    return done.size > 0;
+  }
+
+  placeAll(): number {
+    let n = 0;
+    const handled = new Set<string>();
+    for (const p of pieces.value) {
+      if (p.placement || handled.has(p.id)) continue;
+      if (p.kit && this.kits.has(p.kit)) {
+        const unplaced = new Set(
+          pieces.value.filter((q) => q.kit === p.kit && !q.placement).map((q) => q.id),
+        );
+        this.placeKit(p.kit, unplaced);
+        for (const id of unplaced) handled.add(id);
+        n += unplaced.size;
+        continue;
+      }
+      const home = this.homeFor(p);
+      if (!home) continue;
+      for (const id of this.members(p.id)) handled.add(id);
+      this.getRt(p.id).autoOffset = 0;
+      this.applyPlacement(p.id, home.placement);
+      this.changed(p.id);
+      n++;
+    }
+    return n;
+  }
+
+  private changed(id: string): void {
+    for (const m of this.members(id)) this.onChanged(m);
+  }
+
+  ungroup(id: string): void {
+    updatePiece(id, { group: null });
+    this.onChanged(id);
   }
 
   async loadDemos(): Promise<void> {
@@ -147,7 +304,10 @@ export class PieceManager {
     }
   }
 
-  private addImported(imp: PieceImport, extra: Partial<PieceState> = {}): void {
+  private addImported(
+    imp: PieceImport | (PreparedImport & { id: string }),
+    extra: Partial<PieceState> = {},
+  ): boolean {
     const p = imp.prepared;
     const state: PieceState = {
       id: imp.id,
@@ -171,6 +331,8 @@ export class PieceManager {
       mirrored: false,
       visible: true,
       scaleGroup: null,
+      kit: null,
+      group: null,
       ...extra,
     };
     const preview: MeshData = {
@@ -193,16 +355,16 @@ export class PieceManager {
     this.refreshSamples(imp.id);
     this.refreshThumbnail(imp.id);
     this.onGeometry(imp.id);
-    this.reattach(imp.id);
+    return !this.reattach(imp.id);
   }
 
-  private reattach(id: string): void {
+  private reattach(id: string): boolean {
     const p = this.get(id);
-    if (!p) return;
+    if (!p) return false;
     const pending = pendingPieces.value;
     const candidates = pending.filter((s) => s.sourceIndex === undefined && s.fileHash === p.fileHash);
     const saved = candidates.find((s) => s.name === p.name) ?? candidates[0];
-    if (!saved) return;
+    if (!saved) return false;
     const copies = pending.filter((s) => s.sourceIndex === saved.index);
     pendingPieces.value = pending.filter((s) => s !== saved && !copies.includes(s));
     this.applySaved(id, saved);
@@ -210,6 +372,7 @@ export class PieceManager {
       const newId = this.mirrorCopy(id);
       if (newId) this.applySaved(newId, c);
     }
+    return true;
   }
 
   applySaved(id: string, saved: ProjectPiece): void {
@@ -223,6 +386,7 @@ export class PieceManager {
       orientationConfirmed: true,
       scale: saved.scale,
       mirrored: saved.mirrored,
+      group: saved.group ?? null,
     });
     this.afterOrientationChange(id);
     if (saved.placement && this.body) this.applyPlacement(id, saved.placement as Placement);
@@ -270,8 +434,11 @@ export class PieceManager {
 
   setBody(body: BodyContext): void {
     this.body = body;
+    const seen = new Set<string>();
     for (const p of pieces.value) {
-      if (p.placement) this.applyPlacement(p.id, p.placement, { settle: true });
+      if (!p.placement || seen.has(p.id)) continue;
+      for (const m of this.members(p.id)) seen.add(m);
+      this.applyPlacement(p.id, p.placement, { settle: true });
     }
   }
 
@@ -287,17 +454,42 @@ export class PieceManager {
   offsetDirection(p: PieceState, spec: PlacementSpec): Vec3 | null {
     if (!this.body) return null;
     if (spec.kind === 'surface') return surfacePoint(this.body, spec.face, spec.bary).normal;
+    const b = this.body.bones[spec.bone as BoneId];
     if (p.orientation.category === 'tube') return null;
-    return this.body.bones[spec.bone as BoneId].y;
+    if (spec.local) {
+      const cn = p.orientation.contactNormal;
+      const v = new Vector3(p.mirrored ? -cn[0] : cn[0], cn[1], cn[2]).transformDirection(
+        placementMatrix(spec, this.body, this.frameInfo(p, 0)),
+      );
+      return [v.x, v.y, v.z];
+    }
+    return b.y;
+  }
+
+  private groupSamples(id: string): { points: Float32Array; normals: Float32Array } {
+    const ids = this.members(id);
+    const rts = ids.map((m) => this.runtimes.get(m)).filter(Boolean) as PieceRuntime[];
+    if (rts.length === 1) return { points: rts[0].wPoints, normals: rts[0].wNormals };
+    const per = Math.max(60, Math.floor(1200 / rts.length));
+    const points = new Float32Array(rts.reduce((n, r) => n + Math.min(per, r.wPoints.length / 3) * 3, 0));
+    const normals = new Float32Array(points.length);
+    let o = 0;
+    for (const r of rts) {
+      const n = Math.min(per, r.wPoints.length / 3) * 3;
+      points.set(r.wPoints.subarray(0, n), o);
+      normals.set(r.wNormals.subarray(0, n), o);
+      o += n;
+    }
+    return { points, normals };
   }
 
   private settle(p: PieceState, spec: PlacementSpec, _start: number, samples?: number): number {
     if (!this.body) return 0;
-    const rt = this.runtimes.get(p.id)!;
     const dir = this.offsetDirection(p, spec);
     if (!dir) return 0;
-    let pts = rt.wPoints;
-    let nrm = rt.wNormals;
+    const g = this.groupSamples(p.id);
+    let pts = g.points;
+    let nrm = g.normals;
     if (samples && pts.length / 3 > samples) {
       pts = pts.subarray(0, samples * 3);
       nrm = nrm.subarray(0, samples * 3);
@@ -319,6 +511,7 @@ export class PieceManager {
   clearanceSettings: () => ClearanceSettings = () => DEFAULT_CLEARANCE;
 
   autoSizeInputs(id: string): {
+    ids: string[];
     placement: Matrix4;
     direction: Vec3 | null;
     scale: [number, number, number];
@@ -328,6 +521,7 @@ export class PieceManager {
     const rt = this.runtimes.get(id);
     if (!p?.placement || !rt || !this.body) return null;
     return {
+      ids: this.members(id).filter((m) => this.get(m)?.placement),
       placement: placementMatrix(p.placement, this.body, this.frameInfo(p, rt.autoOffset)),
       direction: this.offsetDirection(p, p.placement),
       scale: p.scale,
@@ -342,14 +536,20 @@ export class PieceManager {
     if (opts.settle !== false) {
       rt.autoOffset = this.settle(p, spec, rt.autoOffset, opts.dragSamples ? DRAG_SAMPLES : undefined);
     }
-    rt.world = this.worldFor(p, spec, rt.autoOffset);
-    rt.view.setMatrix(rt.world.clone().multiply(orientationMatrix(p)));
-    if (!rt.inScene) {
-      this.vp.addObject(rt.view.mesh);
-      rt.inScene = true;
+    for (const mid of this.members(id)) {
+      const mp = this.get(mid);
+      const mrt = this.runtimes.get(mid);
+      if (!mp || !mrt) continue;
+      mrt.autoOffset = rt.autoOffset;
+      mrt.world = this.worldFor(mp, spec, mrt.autoOffset);
+      mrt.view.setMatrix(mrt.world.clone().multiply(orientationMatrix(mp)));
+      if (!mrt.inScene) {
+        this.vp.addObject(mrt.view.mesh);
+        mrt.inScene = true;
+      }
+      if (mp.placement !== spec) updatePiece(mid, { placement: spec });
     }
     this.vp.requestRender();
-    if (p.placement !== spec) updatePiece(id, { placement: spec });
   }
 
   homeFor(p: PieceState): { placement: Placement; point: Vec3 } | null {
@@ -361,6 +561,7 @@ export class PieceManager {
   placeHome(id: string): boolean {
     const p = this.get(id);
     if (!p || !this.body) return false;
+    if (p.kit && this.kits.has(p.kit)) return this.placeKit(p.kit, new Set(this.members(id)));
     const home = this.homeFor(p);
     if (!home) {
       toast('Set the piece type first, or drag it onto the mannequin.', 'error');
@@ -368,7 +569,7 @@ export class PieceManager {
     }
     this.getRt(id).autoOffset = 0;
     this.applyPlacement(id, home.placement);
-    this.onChanged(id);
+    this.changed(id);
     return true;
   }
 
@@ -414,21 +615,22 @@ export class PieceManager {
     const rt = this.runtimes.get(id);
     if (!p || !rt) return false;
     const res = ray ? this.placementForRay(p, ray) : null;
+    const ids = this.members(id);
     if (!res) {
       if (done) {
-        if (!p.placement) this.hide(id);
+        if (!p.placement) ids.forEach((m) => this.hide(m));
         else this.applyPlacement(id, p.placement);
-        rt.view.setGhost(false);
+        ids.forEach((m) => this.runtimes.get(m)?.view.setGhost(false));
       } else if (!p.placement && rt.inScene) {
-        this.hide(id);
+        ids.forEach((m) => this.hide(m));
       }
       return false;
     }
-    rt.view.setGhost(!done);
+    ids.forEach((m) => this.runtimes.get(m)?.view.setGhost(!done));
     this.applyPlacement(id, res.spec, { dragSamples: !done });
     if (done) {
       selectedId.value = id;
-      this.onChanged(id);
+      this.changed(id);
     }
     return res.snapped;
   }
@@ -442,9 +644,11 @@ export class PieceManager {
   }
 
   unplace(id: string): void {
-    this.hide(id);
-    updatePiece(id, { placement: null });
-    this.onChanged(id);
+    for (const m of this.members(id)) {
+      this.hide(m);
+      updatePiece(m, { placement: null });
+      this.onChanged(m);
+    }
   }
 
   remove(id: string): void {
@@ -462,7 +666,7 @@ export class PieceManager {
     if (!p?.placement) return;
     const spec = { ...p.placement, ...patch } as Placement;
     this.applyPlacement(id, spec, { settle });
-    this.onChanged(id);
+    this.changed(id);
   }
 
   twist(id: string, delta: number): void {
@@ -480,7 +684,7 @@ export class PieceManager {
     if (sp.kind === 'bone') {
       const b = this.body.bones[sp.bone as BoneId];
       this.updatePlacement(id, {
-        t: Math.min(1, Math.max(0, sp.t + up / (b.length || 1))),
+        t: Math.min(1.5, Math.max(-0.5, sp.t + up / (b.length || 1))),
         twist: sp.twist + right / 100,
       });
       return;
@@ -497,10 +701,23 @@ export class PieceManager {
   }
 
   setScale(id: string, scale: [number, number, number]): void {
-    updatePiece(id, { scale });
+    for (const m of this.members(id)) updatePiece(m, { scale });
     const p = this.get(id);
     if (p?.placement) this.applyPlacement(id, p.placement);
-    this.onChanged(id);
+    this.changed(id);
+  }
+
+  setScaleAndShift(id: string, scale: [number, number, number], delta: Vec3): void {
+    const p = this.get(id);
+    if (p?.placement && (delta[0] || delta[1] || delta[2])) {
+      const old = p.placement.shift ?? [0, 0, 0];
+      const spec = {
+        ...p.placement,
+        shift: [old[0] + delta[0], old[1] + delta[1], old[2] + delta[2]],
+      } as Placement;
+      for (const m of this.members(id)) updatePiece(m, { placement: spec });
+    }
+    this.setScale(id, scale);
   }
 
   mirrorCopy(id: string): string | null {
@@ -519,6 +736,8 @@ export class PieceManager {
       side,
       mirrored: !p.mirrored,
       placement: null,
+      kit: null,
+      group: null,
       sourceId: p.sourceId ?? id,
     } as PieceState;
     if (copy.name === p.name) copy.name = `${p.name} (mirrored)`;
@@ -556,11 +775,35 @@ export class PieceManager {
   }
 
   setTypeSide(id: string, type: PieceTypeId | null, side: Side | null): void {
+    const p = this.get(id);
+    if (p?.kit) {
+      updatePiece(id, { type, side });
+      return;
+    }
     updatePiece(id, { type, side });
     void this.reorient(id);
   }
 
   setUnitScale(id: string, scale: number): void {
+    const p = this.get(id);
+    if (p?.kit) {
+      const ids = pieces.value.filter((q) => q.kit === p.kit).map((q) => q.id);
+      for (const m of ids) {
+        const q = this.get(m)!;
+        const ratio = scale / q.unitScale;
+        const M = new Matrix4().fromArray(q.orientation.matrix);
+        M.elements[12] *= ratio;
+        M.elements[13] *= ratio;
+        M.elements[14] *= ratio;
+        updatePiece(m, {
+          unitScale: scale,
+          unitConfirmed: true,
+          orientation: { ...q.orientation, matrix: M.elements.slice() },
+        });
+        this.afterOrientationChange(m);
+      }
+      return;
+    }
     updatePiece(id, { unitScale: scale, unitConfirmed: true });
     void this.reorient(id);
   }
@@ -578,6 +821,15 @@ export class PieceManager {
   }
 
   rotateOrientation(id: string, axis: 'x' | 'y' | 'z', degrees: number): void {
+    const ids = this.members(id);
+    if (ids.length > 1) {
+      for (const m of ids) this.rotateOne(m, axis, degrees);
+      return;
+    }
+    this.rotateOne(id, axis, degrees);
+  }
+
+  private rotateOne(id: string, axis: 'x' | 'y' | 'z', degrees: number): void {
     const p = this.get(id);
     if (!p) return;
     const R = new Matrix4();

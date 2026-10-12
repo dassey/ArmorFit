@@ -21,6 +21,7 @@ export function buildProjectJson(): string {
       placement: p.placement,
       scale: p.scale,
       mirrored: p.mirrored,
+      ...(p.group ? { group: p.group } : {}),
       ...(sourceIndex >= 0 ? { sourceIndex } : {}),
     };
   });

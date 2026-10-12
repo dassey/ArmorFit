@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { guessFromFileName, tokenize } from './classify';
+import { guessFromFileName, isDetailPart, tokenize } from './classify';
 import { PIECE_TYPES } from './types';
-import { guessUnits } from './units';
+import { guessSetUnits, guessUnits } from './units';
 
 describe('tokenize', () => {
   it('splits camelCase, digits and separators', () => {
@@ -45,6 +45,20 @@ describe('guessFromFileName', () => {
   });
 });
 
+describe('classifier extras', () => {
+  it('reads "Back X" names as back plates', () => {
+    expect(guessFromFileName('Back Shoulder Left.stl')).toMatchObject({ type: 'back', side: 'L' });
+    expect(guessFromFileName('Kidney Plate.stl').type).toBe('back');
+    expect(guessFromFileName('Shoulder Left.stl').type).toBe('pauldron');
+  });
+
+  it('spots detail parts', () => {
+    expect(isDetailPart('Vent Detail Left.stl')).toBe(true);
+    expect(isDetailPart('Belt Buckle.stl')).toBe(true);
+    expect(isDetailPart('Chest Center.stl')).toBe(false);
+  });
+});
+
 describe('guessUnits', () => {
   it('accepts millimetres for normal-sized parts', () => {
     const g = guessUnits(260);
@@ -54,19 +68,53 @@ describe('guessUnits', () => {
 
   it('recognises metres and centimetres', () => {
     expect(guessUnits(0.28).best.unit).toBe('m');
-    expect(guessUnits(28).best.unit).toBe('cm');
+    expect(guessUnits(29, { expectedSizeMm: 290 }).best.unit).toBe('cm');
+  });
+
+  it('keeps small parts in millimetres but asks', () => {
+    const g = guessUnits(28);
+    expect(g.best.unit).toBe('mm');
+    expect(g.needsConfirmation).toBe(true);
+  });
+
+  it('keeps detail parts in millimetres even when the type is large', () => {
+    const g = guessUnits(28, { expectedSizeMm: 290, detail: true });
+    expect(g.best.unit).toBe('mm');
   });
 
   it('honours a declared unit', () => {
-    const g = guessUnits(2.8, { declared: 'cm' });
+    const g = guessUnits(0.5, { declared: 'cm' });
     expect(g.best.scale).toBe(10);
     expect(g.needsConfirmation).toBe(true);
   });
 
-  it('suggests a reduced-scale preview when the type is known', () => {
+  it('offers a reduced-scale preview when a known piece is far too small', () => {
     const g = guessUnits(58, { expectedSizeMm: 290 });
-    expect(g.best.unit).toBe('scaled');
-    expect(g.best.scale).toBe(5);
     expect(g.needsConfirmation).toBe(true);
+    expect(g.candidates.some((c) => c.unit === 'scaled' && c.scale === 5)).toBe(true);
+  });
+});
+
+describe('guessSetUnits', () => {
+  it('decides millimetres for a set with large and tiny parts', () => {
+    const g = guessSetUnits([
+      { maxDimension: 28, typicalMm: 290 },
+      { maxDimension: 10, typicalMm: 290 },
+      { maxDimension: 340, typicalMm: 420 },
+      { maxDimension: 320, typicalMm: 330 },
+      { maxDimension: 260, typicalMm: 260 },
+    ]);
+    expect(g.best.unit).toBe('mm');
+    expect(g.needsConfirmation).toBe(false);
+  });
+
+  it('decides centimetres for a set drawn in centimetres', () => {
+    const g = guessSetUnits([
+      { maxDimension: 34, typicalMm: 420 },
+      { maxDimension: 29, typicalMm: 290 },
+      { maxDimension: 26, typicalMm: 260 },
+      { maxDimension: 33, typicalMm: 330 },
+    ]);
+    expect(g.best.unit).toBe('cm');
   });
 });

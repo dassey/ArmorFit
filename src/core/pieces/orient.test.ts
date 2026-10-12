@@ -135,4 +135,23 @@ describe('autoOrient', () => {
     expect(recovered([0, 1, 0], new Quaternion(), r.matrix).y).toBeGreaterThan(0.95);
     expect(recovered([0, 0, 1], new Quaternion(), r.matrix).z).toBeGreaterThan(0.95);
   });
+
+  it('finds the inside of a flared plate that wraps the back of a leg', () => {
+    const plate = makeShell({
+      surface: (u, v) => {
+        const a = (u - 0.5) * 2.2;
+        const flare = 1 + 1.6 * (v - 0.75) ** 2 + (v > 0.8 ? (v - 0.8) * 3 : 0);
+        const r = 55 * flare;
+        return [r * Math.sin(a), (v - 0.5) * 320, -r * Math.cos(a)];
+      },
+      uSegments: 60,
+      vSegments: 60,
+      thickness: 3,
+    });
+    const r = autoOrient(plate, { category: 'shell', wrapsVertical: true });
+    const M = new Matrix4().extractRotation(new Matrix4().fromArray(r.matrix));
+    expect(new Vector3(0, 0, -1).applyMatrix4(M).z).toBeGreaterThan(0.95);
+    expect(new Vector3(0, 1, 0).applyMatrix4(M).y).toBeGreaterThan(0.95);
+    expect(r.contactNormal[2]).toBeGreaterThan(0.95);
+  });
 });

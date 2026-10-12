@@ -22,6 +22,7 @@ export type Placement =
       bary: [number, number, number];
       twist: number;
       offset: number;
+      shift?: [number, number, number];
     }
   | {
       kind: 'bone';
@@ -29,6 +30,8 @@ export type Placement =
       t: number;
       twist: number;
       offset: number;
+      local?: number[];
+      shift?: [number, number, number];
     };
 
 export interface PieceState {
@@ -54,6 +57,8 @@ export interface PieceState {
   mirrored: boolean;
   visible: boolean;
   scaleGroup: string | null;
+  kit: string | null;
+  group: string | null;
   sourceId?: string;
   fit?: FitSummary;
   analyzing?: boolean;
@@ -67,6 +72,7 @@ export const pendingPieces = signal<PendingPiece[]>([]);
 export const selectedId = signal<string | null>(null);
 export const selectedPiece = computed(() => pieces.value.find((p) => p.id === selectedId.value) ?? null);
 export const importBusy = signal(0);
+export const importProgress = signal<{ done: number; total: number }>({ done: 0, total: 0 });
 
 export function updatePiece(
   id: string,

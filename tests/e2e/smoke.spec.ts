@@ -5,7 +5,9 @@ import { parseStl, writeStl } from '../../src/core/io/stl';
 import { parse3mf } from '../../src/core/io/threemf';
 import { analyzeTopology } from '../../src/core/mesh/topology';
 import { weldVertices } from '../../src/core/mesh/weld';
-import { makePauldron } from '../../src/core/testmeshes/pieces';
+import { Matrix4, Vector3 } from 'three';
+import type { MeshData } from '../../src/core/mesh/types';
+import { makeChestPlate, makeForearmTube, makeHelmet, makePauldron } from '../../src/core/testmeshes/pieces';
 
 async function open(page: Page): Promise<string[]> {
   const errors: string[] = [];
@@ -102,6 +104,55 @@ test('imports an STL and recognises the piece from its file name', async ({ page
   await expect(card).toContainText('Pauldron');
   await expect(card).toContainText('right');
   await expect(card).not.toContainText('not watertight');
+  expect(errors).toEqual([]);
+});
+
+function placed(mesh: MeshData, m: Matrix4): MeshData {
+  const toFile = new Matrix4().set(-1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1).multiply(m);
+  const positions = new Float32Array(mesh.positions.length);
+  const v = new Vector3();
+  for (let i = 0; i < positions.length; i += 3) {
+    v.set(mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]).applyMatrix4(toFile);
+    positions.set([v.x, v.y, v.z], i);
+  }
+  return { positions, indices: mesh.indices };
+}
+
+test('assembles a set of files that share one layout and sizes it', async ({ page }) => {
+  const errors = await open(page);
+  const at = (x: number, y: number, z: number) => new Matrix4().makeTranslation(x, y, z);
+  const tPose = new Matrix4().makeRotationZ(-Math.PI / 2);
+  const mirror = new Matrix4().makeScale(-1, 1, 1);
+  const thigh = new Matrix4().makeScale(1.7, 1.4, 1.7);
+  const set: [string, MeshData][] = [
+    ['Helmet.stl', placed(makeHelmet(), at(0, 1640, 0))],
+    ['Chest Plate.stl', placed(makeChestPlate(), at(0, 1300, 40))],
+    [
+      'Back Plate.stl',
+      placed(makeChestPlate(), at(0, 1300, -40).multiply(new Matrix4().makeRotationY(Math.PI))),
+    ],
+    ['Pauldron Left.stl', placed(makePauldron(), at(190, 1450, 0))],
+    ['Pauldron Right.stl', placed(makePauldron(), at(-190, 1450, 0).multiply(mirror))],
+    ['Forearm Left.stl', placed(makeForearmTube(), at(560, 1360, 0).multiply(tPose))],
+    ['Forearm Right.stl', placed(makeForearmTube(), at(-560, 1360, 0).multiply(mirror).multiply(tPose))],
+    ['Thigh Left.stl', placed(makeForearmTube(), at(100, 720, 0).multiply(thigh))],
+    ['Thigh Right.stl', placed(makeForearmTube(), at(-100, 720, 0).multiply(thigh))],
+  ];
+  await page.getByRole('tab', { name: 'Armor' }).click();
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('.dropzone').click()]);
+  await chooser.setFiles(
+    set.map(([name, mesh]) => ({ name, mimeType: 'model/stl', buffer: Buffer.from(writeStl(mesh)) })),
+  );
+  const cards = page.locator('.piece-card');
+  await expect(cards.locator('img')).toHaveCount(set.length, { timeout: 60_000 });
+  await expect(page.locator('.toast', { hasText: 'Assembled set found' })).toHaveCount(1);
+  await expect(cards.filter({ hasText: 'check units' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Put all on body' }).click();
+  await expect(cards.filter({ hasText: 'on body' })).toHaveCount(set.length);
+  await page.getByRole('button', { name: 'Auto-size all' }).click();
+  await expect(page.locator('.toast', { hasText: 'Auto-sized' })).toContainText(`${set.length} pieces`, {
+    timeout: 60_000,
+  });
   expect(errors).toEqual([]);
 });
 

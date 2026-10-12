@@ -161,7 +161,7 @@ function AutoSizeBox({ piece, controller }: { piece: PieceState; controller: App
       if (r) {
         const s = r.scale.map((x) => `${(x * 100).toFixed(1)}%`).join(' × ');
         toast(
-          `Scaled to ${mode === 'uniform' ? `${(r.scale[0] * 100).toFixed(1)}%` : s}. Typical gap ${r.before.toFixed(1)} → ${r.after.toFixed(1)} mm.`,
+          `Scaled to ${mode === 'uniform' ? `${(r.scale[0] * 100).toFixed(1)}%` : s}${r.moved >= 1 ? ` and moved ${Math.round(r.moved)} mm` : ''}. Typical gap ${r.before.toFixed(1)} → ${r.after.toFixed(1)} mm.`,
         );
       }
     } catch (e) {

@@ -25,6 +25,7 @@ export class AppController {
   private lastBuilt: MeasurementProfile | null = null;
   private topology: { indices: Uint16Array; regions: Uint8Array } | null = null;
   private query: BodyQuery | null = null;
+  private poolWorkers: Remote<GeometryWorkerApi>[] | null = null;
 
   constructor() {
     this.fit = wrap<FitWorkerApi>(
@@ -35,9 +36,21 @@ export class AppController {
     );
   }
 
+  importPool(): Remote<GeometryWorkerApi>[] {
+    if (!this.poolWorkers) {
+      const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+      this.poolWorkers = Array.from({ length: n }, () =>
+        wrap<GeometryWorkerApi>(
+          new Worker(new URL('../workers/geometry.worker.ts', import.meta.url), { type: 'module' }),
+        ),
+      );
+    }
+    return this.poolWorkers;
+  }
+
   attachViewport(vp: Viewport): void {
     this.viewport = vp;
-    const pm = new PieceManager(vp, this.geo);
+    const pm = new PieceManager(vp, this.geo, () => this.importPool());
     pm.clearanceSettings = () => clearance.value;
     this.pieces = pm;
     this.analysis = new AnalysisManager(this.fit, pm);

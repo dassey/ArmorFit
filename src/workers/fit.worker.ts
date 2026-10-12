@@ -88,7 +88,7 @@ const api = {
   },
 
   autoSize(
-    id: string,
+    ids: string[],
     placement: number[],
     direction: Vec3 | null,
     scale: [number, number, number],
@@ -96,13 +96,38 @@ const api = {
     settings: ClearanceSettings,
     mode: AutoSizeOptions['mode'],
     category: AutoSizeOptions['category'],
+    side: 'L' | 'R' | null = null,
   ): AutoSizeResult {
-    const piece = analysisPieces.get(id);
-    if (!piece || !query) throw new Error('Piece or body not ready');
-    return autoSize(piece, new Matrix4().fromArray(placement), direction, scale, mirrored, query, settings, {
-      mode,
-      category,
-    });
+    const parts = ids.map((id) => analysisPieces.get(id)).filter(Boolean) as AnalysisPiece[];
+    if (!parts.length || !query) throw new Error('Piece or body not ready');
+    const join = (key: 'samplePoints' | 'sampleNormals') => {
+      if (parts.length === 1) return parts[0][key];
+      const out = new Float32Array(parts.reduce((n, p) => n + p[key].length, 0));
+      let o = 0;
+      for (const p of parts) {
+        out.set(p[key], o);
+        o += p[key].length;
+      }
+      return out;
+    };
+    const shiftAxes: [boolean, boolean, boolean] | undefined =
+      mode === 'offset'
+        ? undefined
+        : category === 'tube'
+          ? [true, false, true]
+          : category === 'cap'
+            ? [true, true, true]
+            : undefined;
+    return autoSize(
+      { samplePoints: join('samplePoints'), sampleNormals: join('sampleNormals') },
+      new Matrix4().fromArray(placement),
+      direction,
+      scale,
+      mirrored,
+      query,
+      settings,
+      { mode, category, shiftAxes, excludeSide: side === 'L' ? 2 : side === 'R' ? 1 : undefined },
+    );
   },
 
   analyze(id: string, wToWorld: number[], settings: ClearanceSettings, withHeatmap: boolean): AnalysisResult {

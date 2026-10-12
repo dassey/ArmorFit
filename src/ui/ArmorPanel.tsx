@@ -1,7 +1,15 @@
 import { useState } from 'preact/hooks';
 import { PIECE_TYPES, pieceType, type PieceTypeId, type Side } from '../core/pieces/types';
 import type { AppController } from '../state/controller';
-import { importBusy, needsAttention, pieces, selectedId, type PieceState } from '../state/pieces';
+import {
+  importBusy,
+  importProgress,
+  needsAttention,
+  pieces,
+  selectedId,
+  type PieceState,
+} from '../state/pieces';
+import { toast } from '../state/store';
 import { view } from '../state/store';
 import { Button, pickFiles } from './controls';
 
@@ -108,6 +116,10 @@ function OrientationBox({ piece, controller }: { piece: PieceState; controller: 
   );
 }
 
+function groupSize(piece: PieceState): number {
+  return pieces.value.filter((p) => p.group === piece.group).length;
+}
+
 function PieceCard({ piece, controller }: { piece: PieceState; controller: AppController }) {
   const selected = selectedId.value === piece.id;
   const attention = needsAttention(piece);
@@ -148,6 +160,7 @@ function PieceCard({ piece, controller }: { piece: PieceState; controller: AppCo
             {attention.includes('orientation') && <Badge kind="warn">check orientation</Badge>}
             {attention.includes('mesh') && <Badge kind="warn">not watertight</Badge>}
             {piece.mirrored && <Badge kind="info">mirrored</Badge>}
+            {piece.group && <Badge kind="info">{`set of ${groupSize(piece)}`}</Badge>}
           </div>
         </div>
       </div>
@@ -169,7 +182,19 @@ function PieceCard({ piece, controller }: { piece: PieceState; controller: AppCo
             <Button variant="ghost" onClick={() => pm.remove(piece.id)} title="Remove from the project">
               Delete
             </Button>
+            {piece.group && (
+              <Button
+                variant="ghost"
+                onClick={() => pm.ungroup(piece.id)}
+                title="Move and size this part on its own"
+              >
+                Separate from set
+              </Button>
+            )}
           </div>
+          {piece.group && (
+            <p class="hint">Part of a set of {groupSize(piece)} parts that move and size together.</p>
+          )}
           <label class="field-row">
             <span>Type</span>
             <TypeSelect piece={piece} controller={controller} />
@@ -187,6 +212,9 @@ function PieceCard({ piece, controller }: { piece: PieceState; controller: AppCo
 
 export function ArmorPanel({ controller }: { controller: AppController }) {
   const list = pieces.value;
+  const unplaced = list.filter((p) => !p.placement).length;
+  const placed = list.length - unplaced;
+  const [sizing, setSizing] = useState(false);
   const browse = async () => {
     const files = await pickFiles(ACCEPT, true);
     if (files.length) await controller.pieces?.importFiles(files);
@@ -211,9 +239,40 @@ export function ArmorPanel({ controller }: { controller: AppController }) {
       </div>
       <div class="row wrap gap">
         <Button onClick={() => controller.pieces?.loadDemos()}>Load demo armor</Button>
+        {unplaced > 0 && (
+          <Button
+            variant="primary"
+            onClick={() => {
+              const n = controller.pieces?.placeAll() ?? 0;
+              if (!n) toast('Set the piece types first, or drag pieces onto the mannequin.', 'error');
+            }}
+          >
+            Put all on body
+          </Button>
+        )}
+        {placed > 1 && (
+          <Button
+            disabled={sizing}
+            onClick={async () => {
+              setSizing(true);
+              try {
+                const n = await controller.analysis?.autoSizeAll();
+                toast(`Auto-sized ${n ?? 0} pieces and sets.`);
+              } finally {
+                setSizing(false);
+              }
+            }}
+            title="Auto-size every piece on the body (sets of parts are sized together)"
+          >
+            {sizing ? 'Sizing…' : 'Auto-size all'}
+          </Button>
+        )}
         {importBusy.value > 0 && (
-          <span class="row gap muted">
-            <span class="spinner" /> Processing…
+          <span class="row gap muted" role="status">
+            <span class="spinner" />{' '}
+            {importProgress.value.total > 1
+              ? `Processing ${importProgress.value.done} of ${importProgress.value.total} files…`
+              : 'Processing…'}
           </span>
         )}
       </div>

@@ -3,8 +3,23 @@ import type { OrientationResult } from '../pieces/orient';
 import type { PieceTypeId, Side } from '../pieces/types';
 
 export type ProjectPlacement =
-  | { kind: 'surface'; face: number; bary: [number, number, number]; twist: number; offset: number }
-  | { kind: 'bone'; bone: string; t: number; twist: number; offset: number };
+  | {
+      kind: 'surface';
+      face: number;
+      bary: [number, number, number];
+      twist: number;
+      offset: number;
+      shift?: [number, number, number];
+    }
+  | {
+      kind: 'bone';
+      bone: string;
+      t: number;
+      twist: number;
+      offset: number;
+      local?: number[];
+      shift?: [number, number, number];
+    };
 
 export interface ProjectPiece {
   name: string;
@@ -17,6 +32,7 @@ export interface ProjectPiece {
   placement: ProjectPlacement | null;
   scale: [number, number, number];
   mirrored: boolean;
+  group?: string | null;
   sourceIndex?: number;
 }
 

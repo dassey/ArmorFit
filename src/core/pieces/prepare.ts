@@ -5,12 +5,14 @@ import { analyzeTopology, fixWinding, type TopologyReport } from '../mesh/topolo
 import { boundsSize, computeBounds, type MeshData } from '../mesh/types';
 import { weldVertices } from '../mesh/weld';
 import type { FileUnit } from '../units';
-import { guessFromFileName, type NameGuess } from './classify';
+import { guessFromFileName, isDetailPart, type NameGuess } from './classify';
 import { autoOrient, type OrientationResult } from './orient';
 import { pieceType } from './types';
 import { guessUnits, type UnitGuess } from './units';
 
 export const PREVIEW_TRIANGLES = 100_000;
+
+const WRAPS_VERTICAL = new Set(['chest', 'back', 'abdomen', 'tasset', 'thigh', 'knee', 'shin', 'calf']);
 
 export interface PreparedPiece {
   name: string;
@@ -39,6 +41,7 @@ export function orientPiece(preview: MeshData, unitScale: number, guess: NameGue
     {
       category: info?.category,
       openingDown: info ? info.id !== 'boot' && info.id !== 'hand' : undefined,
+      wrapsVertical: info ? WRAPS_VERTICAL.has(info.id) : undefined,
     },
   );
 }
@@ -47,6 +50,7 @@ export async function preparePiece(
   part: ImportedPart,
   fileName: string,
   declaredUnit?: FileUnit,
+  previewTriangles = PREVIEW_TRIANGLES,
 ): Promise<PreparedPiece> {
   const warnings: string[] = [];
   const welded = weldVertices(part.mesh);
@@ -81,9 +85,10 @@ export async function preparePiece(
   const units = guessUnits(maxDim, {
     declared: declaredUnit,
     expectedSizeMm: guess.type ? pieceType(guess.type).typicalSize : undefined,
+    detail: isDetailPart(part.name) || isDetailPart(fileName),
   });
 
-  const dec = await decimate(full, PREVIEW_TRIANGLES);
+  const dec = await decimate(full, previewTriangles);
   const preview: MeshData = { positions: dec.mesh.positions, indices: dec.mesh.indices };
   preview.normals = computeVertexNormals(preview);
 

@@ -93,12 +93,12 @@ export class AnalysisManager {
   async autoSize(
     id: string,
     mode: 'uniform' | 'axes',
-  ): Promise<{ before: number; after: number; scale: number[] } | null> {
-    if (!this.registered.has(id)) await this.register(id);
+  ): Promise<{ before: number; after: number; scale: number[]; moved: number } | null> {
     const inp = this.pm.autoSizeInputs(id);
     if (!inp) return null;
+    for (const m of inp.ids) if (!this.registered.has(m)) await this.register(m);
     const res = await this.fit.autoSize(
-      id,
+      inp.ids,
       inp.placement.elements.slice(),
       inp.direction,
       inp.scale,
@@ -106,9 +106,30 @@ export class AnalysisManager {
       clearance.value,
       mode,
       this.pm.get(id)!.orientation.category,
+      this.pm.get(id)!.side,
     );
-    this.pm.setScale(id, res.scale);
-    return { before: res.before.median, after: res.after.median, scale: res.scale };
+    this.pm.setScaleAndShift(id, res.scale, res.shift);
+    return {
+      before: res.before.median,
+      after: res.after.median,
+      scale: res.scale,
+      moved: Math.hypot(res.shift[0], res.shift[1], res.shift[2]),
+    };
+  }
+
+  async autoSizeAll(): Promise<number> {
+    const seen = new Set<string>();
+    let n = 0;
+    for (const p of pieces.peek()) {
+      if (!p.placement || seen.has(p.id)) continue;
+      for (const m of this.pm.members(p.id)) seen.add(m);
+      try {
+        if (await this.autoSize(p.id, 'uniform')) n++;
+      } catch {
+        continue;
+      }
+    }
+    return n;
   }
 
   recolor(id: string): void {

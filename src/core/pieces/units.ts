@@ -19,14 +19,11 @@ const PRIOR: Record<FileUnit, number> = { mm: 0.82, in: 0.07, cm: 0.07, m: 0.04 
 
 export function guessUnits(
   maxDimension: number,
-  opts: { declared?: FileUnit; expectedSizeMm?: number } = {},
+  opts: { declared?: FileUnit; expectedSizeMm?: number; detail?: boolean } = {},
 ): UnitGuess {
-  const expected = opts.expectedSizeMm ?? 280;
-  const sigma = opts.expectedSizeMm ? 0.35 : 0.75;
-  const like = (mm: number) => {
-    const z = Math.log(mm / expected) / sigma;
-    return Math.exp(-0.5 * z * z);
-  };
+  const typed = !!opts.expectedSizeMm && !opts.detail;
+  const expected = typed ? opts.expectedSizeMm! : 200;
+  const like = (mm: number) => sizeLikelihood(mm, typed ? expected : undefined);
 
   if (opts.declared) {
     const s = MM_PER[opts.declared];
@@ -53,7 +50,7 @@ export function guessUnits(
     return { scale: MM_PER[u], label: u, unit: u, probability: PRIOR[u] * like(mm), sizeMm: mm };
   });
   const mmSize = maxDimension;
-  if (mmSize < expected * 0.45) {
+  if (typed && mmSize < expected * 0.45) {
     for (const f of [2, 4, 5, 10]) {
       const mm = mmSize * f;
       cands.push({
@@ -75,4 +72,46 @@ export function guessUnits(
       ? `${Math.round(best.sizeMm)} mm across looks like a normal armor piece in millimetres.`
       : `At ${Math.round(maxDimension * 100) / 100} file units across, the most plausible reading is ${best.label} (${Math.round(best.sizeMm)} mm). Please confirm.`;
   return { best, candidates: cands, needsConfirmation, reason };
+}
+
+function lognormal(mm: number, center: number, sigma: number): number {
+  const z = Math.log(Math.max(mm, 1e-9) / center) / sigma;
+  return Math.exp(-0.5 * z * z);
+}
+
+export function sizeLikelihood(mm: number, typicalMm?: number): number {
+  const broad = lognormal(mm, 200, 1);
+  return typicalMm ? 0.3 * broad + 0.7 * lognormal(mm, typicalMm, 0.5) : broad;
+}
+
+export function guessSetUnits(pieces: { maxDimension: number; typicalMm?: number }[]): UnitGuess {
+  const units = Object.keys(PRIOR) as FileUnit[];
+  const logp = units.map((u) => {
+    let l = Math.log(PRIOR[u]);
+    for (const p of pieces) l += Math.log(sizeLikelihood(p.maxDimension * MM_PER[u], p.typicalMm) + 1e-12);
+    return l;
+  });
+  const top = Math.max(...logp);
+  const w = logp.map((l) => Math.exp(l - top));
+  const total = w.reduce((a, b) => a + b, 0);
+  const biggest = Math.max(...pieces.map((p) => p.maxDimension));
+  const cands: UnitCandidate[] = units
+    .map((u, i) => ({
+      scale: MM_PER[u],
+      label: u,
+      unit: u,
+      probability: w[i] / total,
+      sizeMm: biggest * MM_PER[u],
+    }))
+    .sort((a, b) => b.probability - a.probability);
+  const best = cands[0];
+  const needsConfirmation = best.unit !== 'mm' || best.probability < 0.8;
+  return {
+    best,
+    candidates: cands,
+    needsConfirmation,
+    reason: needsConfirmation
+      ? `These ${pieces.length} files look like one set in ${best.label}. Please confirm.`
+      : `These ${pieces.length} files look like one set in millimetres.`,
+  };
 }
