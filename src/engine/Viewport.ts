@@ -8,6 +8,8 @@ import {
   CircleGeometry,
   Color,
   DirectionalLight,
+  DoubleSide,
+  FrontSide,
   Group,
   HemisphereLight,
   Mesh,
@@ -22,6 +24,27 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { regionColor } from '../core/body/regions';
+import type { Vec3 } from '../core/math/linalg';
+import { RulerLayer, type RulerDraw } from './Rulers';
+
+function withKeepMask(mat: MeshStandardMaterial): MeshStandardMaterial {
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = `attribute float keep;\nvarying float vKeep;\n${shader.vertexShader}`.replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\nvKeep = keep;',
+    );
+    shader.fragmentShader = `varying float vKeep;\n${shader.fragmentShader}`
+      .replace(
+        '#include <clipping_planes_fragment>',
+        '#include <clipping_planes_fragment>\nif (vKeep < 0.0) discard;',
+      )
+      .replace(
+        '#include <color_fragment>',
+        '#include <color_fragment>\nif (!gl_FrontFacing) diffuseColor.rgb *= 0.45;',
+      );
+  };
+  return mat;
+}
 
 export class Viewport {
   readonly renderer: WebGLRenderer;
@@ -29,13 +52,16 @@ export class Viewport {
   readonly camera = new PerspectiveCamera(32, 1, 10, 20000);
   readonly controls: OrbitControls;
   readonly world = new Group();
+  private readonly rulers = new RulerLayer();
   private bodyMesh: Mesh<BufferGeometry, MeshStandardMaterial> | null = null;
   private regionColors: Float32Array | null = null;
+  private frameBox: Box3 | null = null;
   private needsRender = true;
   private raf = 0;
   private resizeObserver: ResizeObserver;
   private disposed = false;
   private framed = false;
+  private autoFrame = true;
 
   constructor(readonly container: HTMLElement) {
     this.renderer = new WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -57,6 +83,7 @@ export class Viewport {
     rim.position.set(-2500, 1500, -2500);
     this.scene.add(rim);
     this.scene.add(this.makeFloor());
+    this.scene.add(this.rulers.group);
 
     this.camera.position.set(900, 1300, 3600);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -67,6 +94,7 @@ export class Viewport {
     this.controls.maxDistance = 9000;
     this.controls.maxPolarAngle = Math.PI * 0.95;
     this.controls.addEventListener('change', () => this.requestRender());
+    this.controls.addEventListener('start', () => (this.autoFrame = false));
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
@@ -106,6 +134,7 @@ export class Viewport {
     const moving = this.controls.update();
     if (moving || this.needsRender) {
       this.needsRender = false;
+      this.rulers.layout(this.camera);
       this.renderer.render(this.scene, this.camera);
     }
   };
@@ -118,6 +147,12 @@ export class Viewport {
     this.renderer.domElement.style.height = '100%';
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.rulers.setViewport(w, h, this.camera.fov);
+    this.requestRender();
+  }
+
+  setRulers(items: RulerDraw[]): void {
+    this.rulers.set(items);
     this.requestRender();
   }
 
@@ -129,13 +164,16 @@ export class Viewport {
     this.regionColors = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) this.regionColors.set(regionColor(regions[i]), i * 3);
     geom.setAttribute('color', new BufferAttribute(new Float32Array(n * 3).fill(1), 3));
+    geom.setAttribute('keep', new BufferAttribute(new Float32Array(n).fill(1), 1));
     geom.setIndex(new BufferAttribute(indices, 1));
-    const mat = new MeshStandardMaterial({
-      color: 0xcfc6ba,
-      roughness: 0.68,
-      metalness: 0,
-      vertexColors: true,
-    });
+    const mat = withKeepMask(
+      new MeshStandardMaterial({
+        color: 0xcfc6ba,
+        roughness: 0.68,
+        metalness: 0,
+        vertexColors: true,
+      }),
+    );
     this.bodyMesh = new Mesh(geom, mat);
     this.bodyMesh.name = 'mannequin';
     this.world.add(this.bodyMesh);
@@ -149,11 +187,24 @@ export class Viewport {
     (g.getAttribute('normal') as BufferAttribute).copyArray(normals).needsUpdate = true;
     g.computeBoundingBox();
     g.computeBoundingSphere();
-    if (!this.framed) {
+    if (!this.framed || (this.autoFrame && !this.inView())) {
       this.frameBody();
       this.framed = true;
     }
     this.requestRender();
+  }
+
+  private inView(): boolean {
+    const box = this.frameBox ?? this.bodyMesh?.geometry.boundingBox;
+    if (!box) return true;
+    this.camera.updateMatrixWorld();
+    const v = new Vector3();
+    for (let i = 0; i < 8; i++) {
+      v.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z);
+      v.project(this.camera);
+      if (Math.abs(v.x) > 0.98 || Math.abs(v.y) > 0.98) return false;
+    }
+    return true;
   }
 
   setShowRegions(show: boolean): void {
@@ -166,15 +217,37 @@ export class Viewport {
     this.requestRender();
   }
 
+  setBodyMask(keep: Float32Array | null): void {
+    if (!this.bodyMesh) return;
+    const attr = this.bodyMesh.geometry.getAttribute('keep') as BufferAttribute;
+    if (keep) attr.copyArray(keep);
+    else (attr.array as Float32Array).fill(1);
+    attr.needsUpdate = true;
+    const mat = this.bodyMesh.material;
+    const side = keep ? DoubleSide : FrontSide;
+    if (mat.side !== side) {
+      mat.side = side;
+      mat.needsUpdate = true;
+    }
+    this.requestRender();
+  }
+
+  setFrameBox(box: { min: Vec3; max: Vec3 } | null): void {
+    this.frameBox = box ? new Box3(new Vector3(...box.min), new Vector3(...box.max)) : null;
+  }
+
   frameBody(): void {
-    const box = this.bodyMesh?.geometry.boundingBox;
+    const box = this.frameBox ?? this.bodyMesh?.geometry.boundingBox;
     if (!box) return;
     const center = box.getCenter(new Vector3());
-    const height = box.max.y - box.min.y;
-    const dist = (height * 0.62) / Math.tan(((this.camera.fov / 2) * Math.PI) / 180);
+    const size = box.getSize(new Vector3());
+    const tan = Math.tan(((this.camera.fov / 2) * Math.PI) / 180);
+    const fit = Math.max(size.y / 2 / tan, Math.max(size.x, size.z) / 2 / (tan * this.camera.aspect));
+    const dist = fit * 1.24 + (this.frameBox ? size.z / 2 : 0);
     this.controls.target.copy(center);
-    this.camera.position.set(center.x + dist * 0.28, center.y + height * 0.08, center.z + dist);
+    this.camera.position.set(center.x + dist * 0.28, center.y + size.y * 0.08, center.z + dist);
     this.controls.update();
+    this.autoFrame = true;
     this.requestRender();
   }
 
@@ -265,6 +338,7 @@ export class Viewport {
     cancelAnimationFrame(this.raf);
     this.resizeObserver.disconnect();
     this.controls.dispose();
+    this.rulers.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

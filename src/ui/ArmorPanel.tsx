@@ -156,6 +156,7 @@ function PieceCard({ piece, controller }: { piece: PieceState; controller: AppCo
           </div>
           <div class="badges">
             {piece.placement ? <Badge kind="ok">on body</Badge> : <Badge kind="info">in tray</Badge>}
+            {piece.hidden && <Badge kind="info">hidden in this view</Badge>}
             {attention.includes('units') && <Badge kind="warn">check units</Badge>}
             {attention.includes('orientation') && <Badge kind="warn">check orientation</Badge>}
             {attention.includes('mesh') && <Badge kind="warn">not watertight</Badge>}

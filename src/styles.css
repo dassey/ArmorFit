@@ -121,6 +121,11 @@ select {
   padding: 4px 8px;
 }
 
+.vp-select {
+  padding: 2px 6px;
+  font-size: 13px;
+}
+
 .status-badge {
   align-self: center;
   display: flex;
@@ -285,22 +290,95 @@ fieldset.group legend {
   padding: 0 4px;
 }
 
+.field {
+  border-radius: 8px;
+  margin: 0 -6px;
+  padding: 3px 6px 4px;
+}
+
+.field.active {
+  background: rgba(255, 159, 26, 0.08);
+  box-shadow: inset 2px 0 0 #ff9f1a;
+}
+
+.field-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
 .field label {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  margin-bottom: 3px;
+  flex: 1;
+  min-width: 0;
 }
 
 .field-input {
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+
+.measure-range {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.ruler-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ruler-btn:hover {
+  color: var(--text);
+}
+
+.ruler-btn.on {
+  color: #ff9f1a;
+  border-color: #7a5420;
+  background: rgba(255, 159, 26, 0.12);
+}
+
+.ruler-bar .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ruler-bar .btn[aria-pressed='true'] {
+  color: #ff9f1a;
+  border-color: #7a5420;
+}
+
+.part-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
 input.num {
-  width: 96px;
+  width: 84px;
   background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 8px;

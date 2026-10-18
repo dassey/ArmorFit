@@ -2,6 +2,7 @@
 import { Matrix4 } from 'three';
 import { parseBodyAsset } from '../core/body/asset';
 import { MannequinBuilder, type Mannequin } from '../core/body/mannequin';
+import type { LoopEdges } from '../core/body/rulers';
 import {
   analyzePiece,
   prepareAnalysisPiece,
@@ -25,6 +26,7 @@ export interface BodyMeta {
   vertexCount: number;
   triangleCount: number;
   credits: string;
+  loops: Record<string, LoopEdges>;
 }
 
 export interface BodyUpdate {
@@ -53,6 +55,7 @@ const api = {
         vertexCount: asset.header.bodyVertexCount,
         triangleCount: asset.header.triangleCount,
         credits: asset.header.credits,
+        loops: Object.fromEntries(Object.entries(asset.header.loops).map(([k, l]) => [k, l.edges])),
         indices,
         regions,
       },

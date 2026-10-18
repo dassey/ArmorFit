@@ -219,11 +219,65 @@ test('exposes the app to AI agents through WebMCP', async ({ page }) => {
   expect(after.scalePercent[0]).not.toBe(100);
   const d = await call('armorfit_get_piece', { id: 'Demo bracer L' });
   expect(d.fit.covers[0].region).toContain('Forearm');
+  await call('armorfit_set_measurements', { values: { forearmCirc: 34 }, unit: 'cm' });
+  const refit = await call('armorfit_get_piece', { id: 'Demo bracer L' });
+  expect(refit.verdict).not.toBe('analysing');
+  expect(refit.fit.medianGapMm).toBeLessThan(d.fit.medianGapMm);
   const report = await call('armorfit_sizing_report');
   expect(report).toContain('# ArmorFit sizing report');
   await call('armorfit_show', { tab: 'armor', id: bracer.id });
   await expect(page.locator('.piece-card')).toHaveCount(4);
   await expect(page.locator('.piece-card.selected')).toContainText('Demo bracer L');
+  expect((await call('armorfit_show', { bodyPart: 'arms' })).bodyPart).toBe('arms');
+  for (const name of ['Demo helmet', 'Demo chest plate'])
+    await expect(page.locator('.piece-card', { hasText: name })).toContainText('hidden in this view');
+  await expect(page.locator('.piece-card', { hasText: 'Demo bracer L' })).not.toContainText('hidden');
+  expect((await call('armorfit_get_status')).bodyPart).toBe('arms');
+  expect(errors).toEqual([]);
+});
+
+test('sizes the body with sliders and shows only the body part being fitted', async ({ page }) => {
+  const errors = await open(page);
+  const idle = () => expect(page.locator('.status-badge')).toHaveCount(0, { timeout: 60_000 });
+
+  await page.getByRole('slider', { name: 'Height slider' }).fill('185');
+  await expect(page.locator('input#m-height')).toHaveValue('185.0');
+  await idle();
+  await expect(
+    page.locator('.field', { hasText: 'Height' }).getByRole('button', { name: 'yours' }),
+  ).toBeVisible();
+
+  await page.getByRole('radio', { name: 'Helmet', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Body part shown' })).toHaveValue('head');
+  await expect(page.getByRole('slider')).toHaveCount(4);
+  await expect(page.getByRole('slider', { name: 'Height slider' })).toHaveCount(0);
+  await page.getByRole('slider', { name: 'Head length slider' }).fill('21');
+  await idle();
+  const ruler = page.getByRole('button', { name: 'Ruler for head length' });
+  await ruler.click();
+  await expect(ruler).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('tab', { name: 'Armor' }).click();
+  await page.getByRole('button', { name: 'Load demo armor' }).click();
+  await expect(page.locator('.piece-card img')).toHaveCount(4, { timeout: 60_000 });
+  await page.getByRole('button', { name: 'Put all on body' }).click();
+  const hidden = page.locator('.piece-card', { hasText: 'hidden in this view' });
+  await expect(hidden).toHaveCount(3);
+  await expect(page.locator('.piece-card', { hasText: 'Demo helmet' })).not.toContainText('hidden');
+
+  await page.reload();
+  await idle();
+  await expect(page.getByRole('radio', { name: 'Helmet', exact: true })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  expect(Number(await page.locator('input#m-headLength').inputValue())).toBeCloseTo(21, 1);
+  await page.getByRole('combobox', { name: 'Body part shown' }).selectOption('full');
+  await expect(page.getByRole('radio', { name: 'Detailed', exact: true })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  await expect(page.getByRole('slider')).toHaveCount(22);
   expect(errors).toEqual([]);
 });
 

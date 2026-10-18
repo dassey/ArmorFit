@@ -14,9 +14,12 @@ export interface DistanceResult {
   distance: number;
   point: Vec3;
   face: number;
+  bary: [number, number, number];
   normal: Vec3;
   region: number;
 }
+
+export type SurfaceFilter = (face: number, bary: [number, number, number]) => boolean;
 
 export class BodyQuery {
   readonly geometry: BufferGeometry;
@@ -88,20 +91,26 @@ export class BodyQuery {
     return [n[0] / l, n[1] / l, n[2] / l];
   }
 
-  raycast(origin: Vec3, dir: Vec3, far = Infinity): SurfaceHit | null {
+  raycast(origin: Vec3, dir: Vec3, far = Infinity, accept?: SurfaceFilter): SurfaceHit | null {
     this.ray.origin.set(origin[0], origin[1], origin[2]);
     this.ray.direction.set(dir[0], dir[1], dir[2]).normalize();
-    const hit = this.bvh.raycastFirst(this.ray, DoubleSide, 0, far);
-    if (!hit || hit.faceIndex == null) return null;
-    const point: Vec3 = [hit.point.x, hit.point.y, hit.point.z];
-    const bary = this.bary(hit.faceIndex, point);
-    return {
-      face: hit.faceIndex,
-      point,
-      bary,
-      normal: this.smoothNormal(hit.faceIndex, bary),
-      distance: hit.distance,
-    };
+    const hits = accept
+      ? this.bvh.raycast(this.ray, DoubleSide, 0, far).sort((a, b) => a.distance - b.distance)
+      : [this.bvh.raycastFirst(this.ray, DoubleSide, 0, far)];
+    for (const hit of hits) {
+      if (!hit || hit.faceIndex == null) continue;
+      const point: Vec3 = [hit.point.x, hit.point.y, hit.point.z];
+      const bary = this.bary(hit.faceIndex, point);
+      if (accept && !accept(hit.faceIndex, bary)) continue;
+      return {
+        face: hit.faceIndex,
+        point,
+        bary,
+        normal: this.smoothNormal(hit.faceIndex, bary),
+        distance: hit.distance,
+      };
+    }
+    return null;
   }
 
   distance(p: Vec3, maxDistance = Infinity): DistanceResult | null {
@@ -117,6 +126,6 @@ export class BodyQuery {
     if (bary[1] > bary[k]) k = 1;
     if (bary[2] > bary[k]) k = 2;
     const region = this.regions[this.indices[hit.faceIndex * 3 + k]];
-    return { distance: sign * hit.distance, point, face: hit.faceIndex, normal, region };
+    return { distance: sign * hit.distance, point, face: hit.faceIndex, bary, normal, region };
   }
 }

@@ -13,12 +13,20 @@ tight or loose, let ArmorFit scale them, and export print-ready files.
 
 ## How to use it
 
-1. **Body:** choose cm or inches and enter your height, chest, waist and head
-   circumference. Quick mode estimates the other 18 measurements from the
-   ANSUR II body survey. Detailed mode lets you enter all 22. Pick a body
-   shape (neutral, masculine or feminine) and what you wear under the armor
-   (nothing, a bodysuit or foam padding). The mannequin reshapes after each
-   value you enter. You can export and import your measurements as JSON.
+1. **Body:** say what you are fitting: the full body, or one part such as the
+   helmet, chest and back, shoulders, arms, hands, waist and hips, legs or
+   feet. For one part, the Body tab shows only the measurements that size it
+   and the viewport shows only that part of the mannequin, close up. Armor on
+   other parts is hidden until you go back to the full body.
+   Choose cm or inches and enter your measurements: drag a slider to watch the
+   mannequin reshape, or type an exact value. Quick mode asks for your height,
+   chest, waist and head circumference and estimates the other 18 measurements
+   from the ANSUR II body survey. Detailed mode lets you enter all 22. Hover
+   over a measurement or drag its slider to see a ruler on the mannequin that
+   shows where it is taken; the ruler button keeps it there. Pick a body shape
+   (neutral, masculine or feminine) and what you wear under the armor
+   (nothing, a bodysuit or foam padding). You can export and import your
+   measurements as JSON.
 2. **Armor:** drop your armor files, or try the demo pieces. ArmorFit repairs
    the mesh (merges duplicate vertices, fixes flipped faces) and warns you if it
    is not watertight. It guesses the units and the piece type and turns the

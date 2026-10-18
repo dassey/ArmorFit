@@ -7,7 +7,7 @@ export type VertexGetter = (v: number) => Vec3;
 
 export type SparseGradient = number[];
 
-const LOOP_FOR: Partial<Record<MeasurementKey, string>> = {
+export const LOOP_FOR: Partial<Record<MeasurementKey, string>> = {
   chest: 'chest',
   waist: 'waist',
   hips: 'hips',

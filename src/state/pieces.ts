@@ -56,6 +56,7 @@ export interface PieceState {
   scale: [number, number, number];
   mirrored: boolean;
   visible: boolean;
+  hidden?: boolean;
   scaleGroup: string | null;
   kit: string | null;
   group: string | null;

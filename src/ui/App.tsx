@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'preact/hooks';
+import { BODY_PARTS, type BodyPartId } from '../core/body/parts';
 import { Viewport } from '../engine/Viewport';
 import type { AppController } from '../state/controller';
 import { body, view, type Tab } from '../state/store';
@@ -32,6 +33,17 @@ function ViewportOverlay({ viewport }: { viewport: () => Viewport | null }) {
       <StatusBadge />
       <HeatmapLegend />
       <div class="vp-tools">
+        <select
+          class="vp-select"
+          aria-label="Body part shown"
+          title="Show only the body part you are fitting"
+          value={view.part.value}
+          onChange={(e) => (view.part.value = (e.target as HTMLSelectElement).value as BodyPartId)}
+        >
+          {BODY_PARTS.map((b) => (
+            <option value={b.id}>{b.label}</option>
+          ))}
+        </select>
         <label class="toggle">
           <input
             type="checkbox"

@@ -56,6 +56,18 @@ export class AnalysisManager {
     this.registered.get(id)!.add(w);
   }
 
+  scheduleAll(delay: number): void {
+    for (const p of pieces.peek()) if (p.placement) this.schedule(p.id, delay);
+  }
+
+  hold(): void {
+    for (const p of pieces.peek()) {
+      if (!p.placement) continue;
+      clearTimeout(this.timers.get(p.id));
+      if (!p.analyzing) updatePiece(p.id, { analyzing: true });
+    }
+  }
+
   schedule(id: string, delay = 120): void {
     clearTimeout(this.timers.get(id));
     const p = this.pm.get(id);

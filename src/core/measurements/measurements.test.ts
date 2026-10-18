@@ -109,6 +109,15 @@ describe('measurement profile', () => {
     expect(p.userSet).toContain('height');
   });
 
+  it('entering a measurement quick mode ignores switches to detailed so it counts', () => {
+    let p = setMeasurement(newProfile(), 'height', 1800);
+    expect(p.mode).toBe('quick');
+    p = setMeasurement(p, 'headLength', 215);
+    expect(p.mode).toBe('detailed');
+    expect(p.values.headLength).toBe(215);
+    expect(p.values.height).toBe(1800);
+  });
+
   it('detailed-mode overrides are kept and cleared on request', () => {
     let p: MeasurementProfile = { ...newProfile(), mode: 'detailed' };
     p = setMeasurement(p, 'bicepCirc', 420);

@@ -1,6 +1,6 @@
 import { Matrix4, Vector3 } from 'three';
 import type { Bone, BoneId } from '../core/body/skeleton';
-import type { BodyQuery } from '../core/fit/bodyQuery';
+import type { BodyQuery, SurfaceFilter } from '../core/fit/bodyQuery';
 import { boneAnchorAt, homeAnchor, type HomeContext } from '../core/fit/homes';
 import {
   placementMatrix,
@@ -113,6 +113,7 @@ export class PieceManager {
   private batching = 0;
   private thumbQueue = new Set<string>();
   private thumbScheduled = false;
+  private surfaceFilter: SurfaceFilter | null = null;
 
   constructor(
     private readonly vp: Viewport,
@@ -136,7 +137,28 @@ export class PieceManager {
   }
 
   views(): PieceView[] {
-    return [...this.runtimes.values()].filter((r) => r.inScene).map((r) => r.view);
+    return [...this.runtimes.values()].filter((r) => r.inScene && r.view.mesh.visible).map((r) => r.view);
+  }
+
+  setSurfaceFilter(filter: SurfaceFilter | null): void {
+    this.surfaceFilter = filter;
+    for (const p of pieces.value) this.refreshVisibility(p.id);
+    this.vp.requestRender();
+  }
+
+  private refreshVisibility(id: string): void {
+    const rt = this.runtimes.get(id);
+    if (!rt?.inScene) return;
+    let visible = true;
+    if (this.surfaceFilter && this.body) {
+      const g = rt.view.geometry;
+      if (!g.boundingBox) g.computeBoundingBox();
+      const c = g.boundingBox!.getCenter(new Vector3()).applyMatrix4(rt.view.mesh.matrix);
+      const hit = this.body.query.distance([c.x, c.y, c.z]);
+      visible = !hit || this.surfaceFilter(hit.face, hit.bary);
+    }
+    rt.view.mesh.visible = visible;
+    if (!!this.get(id)?.hidden === visible) updatePiece(id, { hidden: !visible });
   }
 
   runtime(id: string): PieceRuntime | undefined {
@@ -479,11 +501,20 @@ export class PieceManager {
 
   setBody(body: BodyContext): void {
     this.body = body;
+    this.reapply(false);
+  }
+
+  settleAll(): void {
+    this.reapply(true);
+  }
+
+  private reapply(settle: boolean): void {
+    if (!this.body) return;
     const seen = new Set<string>();
     for (const p of pieces.value) {
       if (!p.placement || seen.has(p.id)) continue;
       for (const m of this.members(p.id)) seen.add(m);
-      this.applyPlacement(p.id, p.placement, { settle: true });
+      this.applyPlacement(p.id, p.placement, { settle });
     }
   }
 
@@ -593,6 +624,8 @@ export class PieceManager {
         mrt.inScene = true;
       }
       if (mp.placement !== spec) updatePiece(mid, { placement: spec });
+      if (opts.dragSamples) mrt.view.mesh.visible = true;
+      else this.refreshVisibility(mid);
     }
     this.vp.requestRender();
   }
@@ -624,7 +657,7 @@ export class PieceManager {
 
   placementForRay(p: PieceState, ray: Ray3): { spec: Placement; snapped: boolean } | null {
     if (!this.body) return null;
-    const hit = this.body.query.raycast(ray.origin, ray.dir);
+    const hit = this.body.query.raycast(ray.origin, ray.dir, Infinity, this.surfaceFilter ?? undefined);
     if (!hit) return null;
     const home = this.homeFor(p);
     if (home && v3.dist(home.point, hit.point) < SNAP_DISTANCE)
@@ -686,6 +719,7 @@ export class PieceManager {
       this.vp.removeObject(rt.view.mesh);
       rt.inScene = false;
     }
+    if (this.get(id)?.hidden) updatePiece(id, { hidden: false });
   }
 
   unplace(id: string): void {

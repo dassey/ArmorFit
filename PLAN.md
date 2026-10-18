@@ -78,14 +78,15 @@ src/
     geometry/             BVH helpers, ray distance, Fibonacci directions
     io/                   STL (read/write), OBJ (read), 3MF (read/write, p:path), dispatch
     measurements/         schema, ANSUR II estimation, profiles (persistence, JSON import/export)
-    body/                 asset format, morph engine, tape loops & landmarks, solver, pose, skeleton, regions
+    body/                 asset format, morph engine, tape loops & landmarks, solver, pose, skeleton, regions,
+                          body parts (one-part views), measurement rulers
     pieces/               piece types, file-name classifier, unit guess, auto-orientation, prepare pipeline
     fit/                  body query (BVH), clearance, region tally, placement & home anchors, settle, auto-size, heatmap
     print/                printer presets, build-volume check
     export/               transform baking, sizing report, project file
     testmeshes/           procedural helmet / chest plate / pauldron / forearm tube
   workers/                rpc.ts, geometry.worker.ts, fit.worker.ts
-  engine/                 Viewport (scene, camera, lights), PieceView, Interaction (drag, twist, touch)
+  engine/                 Viewport (scene, camera, lights), PieceView, Interaction (drag, twist, touch), Rulers
   state/                  store (signals), pieces, pieceManager (placement actions), analysis, controller, project
   ui/                     App, MeasurementsPanel, ArmorPanel, FitPanel, PrintPanel, controls
   main.tsx, styles.css, version.ts
@@ -126,10 +127,16 @@ space, mm, feet at y = 0, facing +Z). Exports convert Y-up → Z-up for slicers.
 
 ## Data flow
 
-1. **Measurements → mannequin.** Edit → `estimate()` fills non-user fields →
-   (coalesced) `fit.worker.buildBody(profile)` solves morph weights, rebuilds
-   positions/normals/BVH → main thread updates the mannequin buffer in place →
-   placements are re-resolved from their anchors → fits recomputed.
+1. **Measurements → mannequin.** Edit (slider or number) → `estimate()` fills
+   non-user fields → (coalesced) `fit.worker.buildBody(profile)` solves morph
+   weights, rebuilds positions/normals/BVH → main thread updates the mannequin
+   buffer in place → placements are re-resolved from their anchors → once the
+   body stops changing (slider released), pieces are settled and fits
+   recomputed. When one body part is selected, a per-vertex mask (region
+   weights smoothed over the mesh, cut by planes through the joints) hides the
+   rest of the mannequin in the shader, the camera frames the part, and pieces
+   and drop targets on hidden parts are ignored. Rulers are drawn from the tape
+   loops and landmarks of the current mannequin.
 2. **Upload.** Files → `geometry.worker.importFile(name, buffer)` → parse → weld → repair
    winding → topology report → unit guess → auto-orient →
    decimate preview → returns preview mesh + metadata; piece appears in the tray
@@ -166,6 +173,8 @@ space, mm, feet at y = 0, facing +Z). Exports convert Y-up → Z-up for slicers.
 - [x] Export: STL, ZIP, 3MF, sizing report, project file; oversize flags
 - [x] README (setup, deploy, contributing), CI (typecheck, lint, format, tests, build), Pages deploy
 - [x] Browser smoke tests in CI (Playwright: demo fit and auto-size, every export, STL import, phone layout)
+- [x] Measurement sliders with live mannequin updates, one-part views (helmet, chest and back, shoulders, arms,
+      hands, waist and hips, legs, feet) and on-body measurement rulers
 
 ### Phase 2
 

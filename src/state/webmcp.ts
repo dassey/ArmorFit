@@ -1,3 +1,4 @@
+import { BODY_PARTS, isBodyPartId } from '../core/body/parts';
 import { sizingReportMarkdown } from '../core/export/report';
 import {
   MEASUREMENT_KEYS,
@@ -150,6 +151,7 @@ function status(): Json {
     enteredByUser: p.userSet,
     clearanceMm: clearance.value,
     tab: view.tab.value,
+    bodyPart: view.part.value,
     selected: selectedId.value,
     pieces: pieces.value.map(summary),
   };
@@ -388,21 +390,31 @@ export function buildTools(controller: AppController): ToolDefinition[] {
     },
     {
       name: 'armorfit_show',
-      title: 'Show a tab or piece',
+      title: 'Show a tab, piece or body part',
       description:
-        'Switch the visible tab and optionally select a piece so the user sees what you are talking about.',
+        'Switch the visible tab, optionally select a piece, and optionally show only one body part (for example "head" when the user is only making a helmet) so the user sees what you are talking about.',
       inputSchema: {
         type: 'object',
         properties: {
           tab: { type: 'string', enum: ['body', 'armor', 'fit', 'print'] },
           id: { type: 'string' },
+          bodyPart: {
+            type: 'string',
+            enum: BODY_PARTS.map((b) => b.id),
+            description: `Body part shown on the mannequin and in the Body tab: ${BODY_PARTS.map((b) => `${b.id} (${b.label})`).join(', ')}.`,
+          },
         },
       },
       annotations: { readOnlyHint: true },
       execute: async (input) => {
         if (input.id) selectedId.value = find(input.id).id;
         if (input.tab) view.tab.value = input.tab as Tab;
-        return text({ tab: view.tab.value, selected: selectedId.value });
+        if (input.bodyPart !== undefined) {
+          if (!isBodyPartId(input.bodyPart))
+            throw new Error(`Unknown body part "${String(input.bodyPart)}".`);
+          view.part.value = input.bodyPart;
+        }
+        return text({ tab: view.tab.value, selected: selectedId.value, bodyPart: view.part.value });
       },
     },
     {
