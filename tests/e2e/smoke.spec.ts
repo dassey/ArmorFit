@@ -307,3 +307,28 @@ test.describe('on a phone', () => {
     expect(errors).toEqual([]);
   });
 });
+
+test('lets you make your own dummy and remembers it', async ({ page }) => {
+  const errors = await open(page);
+  const dummy = page.getByRole('button', { name: 'Dummy' });
+  await dummy.click();
+  const panel = page.getByRole('dialog', { name: 'Make your own dummy' });
+  await expect(panel.getByRole('radio', { name: 'Crash test' })).toHaveAttribute('aria-checked', 'true');
+  await expect(panel.getByLabel('Target markers')).toBeChecked();
+
+  await panel.getByRole('radio', { name: 'Fitting suit' }).click();
+  await expect(panel.getByLabel('Face visor')).toBeChecked();
+  await panel.getByLabel('Body').fill('#3366ff');
+  await panel.getByLabel('Joint seams').check();
+  await expect(panel.getByText('custom')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
+
+  await page.reload();
+  await expect(page.locator('.status-badge')).toHaveCount(0, { timeout: 60_000 });
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('armorfit:dummy:v1')!));
+  expect(saved).toMatchObject({ preset: 'custom', body: '#3366ff', seams: true, visor: true });
+  await dummy.click();
+  await expect(panel.getByLabel('Joint seams')).toBeChecked();
+  expect(errors).toEqual([]);
+});

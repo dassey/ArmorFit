@@ -73,7 +73,7 @@ const api = {
     const m = builder.build(profile);
     const qp = m.positions.slice();
     const qn = m.normals.slice();
-    const display = dummy!.shape(m.positions);
+    const display = dummy!.shape(m.positions, m.joints, m.landmarks);
     if (!query) query = new BodyQuery(qp, qn, topology.indices, topology.regions);
     else query.update(qp, qn);
     return transfer(
@@ -91,6 +91,7 @@ const api = {
         display.positions.buffer,
         display.normals.buffer,
         display.visor.buffer,
+        display.marker.buffer,
       ] as ArrayBuffer[],
     );
   },

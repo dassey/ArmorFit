@@ -2,7 +2,9 @@ import { useEffect, useRef } from 'preact/hooks';
 import { BODY_PARTS, type BodyPartId } from '../core/body/parts';
 import { Viewport } from '../engine/Viewport';
 import type { AppController } from '../state/controller';
-import { body, photoSized, profile, view, type Tab } from '../state/store';
+import { effect } from '@preact/signals';
+import { body, dummyStyle, photoSized, profile, view, type Tab } from '../state/store';
+import { DummyPanel } from './DummyPanel';
 import { ArmorPanel } from './ArmorPanel';
 import { FitPanel, HeatmapLegend } from './FitPanel';
 import { MeasurementsPanel } from './MeasurementsPanel';
@@ -61,6 +63,7 @@ function ViewportOverlay({ viewport }: { viewport: () => Viewport | null }) {
         >
           ⟲ View
         </button>
+        <DummyPanel />
       </div>
       {profile.value.userSet.length === 0 && !photoSized.value && !view.photoSizer.value && (
         <button type="button" class="btn primary vp-cta" onClick={() => (view.photoSizer.value = true)}>
@@ -91,6 +94,7 @@ export function App({ controller }: { controller: AppController }) {
     const vp = new Viewport(vpRef.current!);
     viewportRef.current = vp;
     controller.attachViewport(vp);
+    const stopStyle = effect(() => vp.setDummyStyle(dummyStyle.value));
     void controller.start();
     const over = (e: DragEvent) => {
       if (e.dataTransfer?.types.includes('Files')) {
@@ -116,6 +120,7 @@ export function App({ controller }: { controller: AppController }) {
       window.removeEventListener('dragover', over);
       window.removeEventListener('dragleave', leave);
       window.removeEventListener('drop', drop);
+      stopStyle();
       vp.dispose();
     };
   }, []);

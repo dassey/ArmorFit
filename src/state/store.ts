@@ -1,4 +1,5 @@
 import { computed, effect, signal } from '@preact/signals';
+import { DUMMY_PRESETS, parseDummyStyle, type DummyStyle } from '../core/body/dummyStyle';
 import { isBodyPartId, partMeasurements, type BodyPartId } from '../core/body/parts';
 import {
   clearMeasurement,
@@ -93,6 +94,20 @@ export const view = {
 };
 
 effect(() => safeSave(PART_KEY, view.part.value));
+
+const DUMMY_KEY = 'armorfit:dummy:v1';
+export const dummyStyle = signal<DummyStyle>(parseDummyStyle(safeLoad(DUMMY_KEY)));
+effect(() => safeSave(DUMMY_KEY, JSON.stringify(dummyStyle.value)));
+
+export const dummyActions = {
+  preset(id: keyof typeof DUMMY_PRESETS) {
+    const { label: _label, ...style } = DUMMY_PRESETS[id];
+    dummyStyle.value = style;
+  },
+  change(patch: Partial<Omit<DummyStyle, 'preset'>>) {
+    dummyStyle.value = { ...dummyStyle.value, ...patch, preset: 'custom' };
+  },
+};
 
 const PHOTO_KEY = 'armorfit:photo-sized:v1';
 /** When the measurements last came from photos (ISO date), or null. */

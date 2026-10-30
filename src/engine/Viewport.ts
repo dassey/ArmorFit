@@ -6,6 +6,7 @@ import {
   BufferAttribute,
   BufferGeometry,
   CircleGeometry,
+  Color,
   RingGeometry,
   DirectionalLight,
   DoubleSide,
@@ -23,33 +24,75 @@ import {
   CanvasTexture,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { DummyShape } from '../core/body/dummy';
-import { regionColor } from '../core/body/regions';
+import { dummySeams, type DummyShape } from '../core/body/dummy';
+import { parseDummyStyle, type DummyStyle } from '../core/body/dummyStyle';
+import { REGIONS, regionColor } from '../core/body/regions';
 import type { Vec3 } from '../core/math/linalg';
 import { RulerLayer, type RulerDraw } from './Rulers';
 
-const SUIT = 0x4b525e;
+const MAX_SEAMS = 16;
 
-// The mannequin wears a fitting suit: graphite fabric, tailor's contour lines every 3 cm of height, a dark glossy
-// visor over the face and a warm rim light. Hidden body parts (one-part views) are discarded; back faces show
-// darker through the cut.
-function suitMaterial(): MeshStandardMaterial {
-  const mat = new MeshStandardMaterial({ color: SUIT, roughness: 0.62, metalness: 0.05, vertexColors: true });
+const DUMMY_UNIFORMS = {
+  uTrim: { value: new Color() },
+  uMarkerLight: { value: new Color() },
+  uRim: { value: new Color() },
+  uRimStrength: { value: 0.3 },
+  uMarkers: { value: 1 },
+  uSeams: { value: 1 },
+  uVisor: { value: 0 },
+  uLines: { value: 0 },
+  uSeamCount: { value: 0 },
+  uSeamAt: { value: Array.from({ length: MAX_SEAMS }, () => new Vector3()) },
+  uSeamNormal: { value: Array.from({ length: MAX_SEAMS }, () => new Vector3()) },
+  uSeamReach: { value: new Array<number>(MAX_SEAMS).fill(0) },
+  uSeamRegions: { value: new Array<number>(MAX_SEAMS).fill(0) },
+  uSeamSide: { value: new Array<number>(MAX_SEAMS).fill(0) },
+};
+
+// The mannequin is a dummy whose look is set by DummyStyle: body colour and gloss, joint seams, crash-test target
+// markers (quarters in the trim colour), a dark glossy visor over the face, contour lines every 3 cm of height
+// and a rim light. Hidden body parts (one-part views) are discarded; back faces show darker through the cut.
+function dummyMaterial(): MeshStandardMaterial {
+  const mat = new MeshStandardMaterial({ roughness: 0.4, metalness: 0.02, vertexColors: true });
   mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, DUMMY_UNIFORMS);
     shader.vertexShader = `attribute float keep;
       attribute float visor;
+      attribute float region;
+      attribute vec3 marker;
       varying float vKeep;
       varying float vVisor;
-      varying float vHeight;
+      flat varying float vRegion;
+      varying vec3 vMarker;
+      varying vec3 vWorld;
       ${shader.vertexShader}`
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvKeep = keep;\nvVisor = visor;')
+      .replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\nvKeep = keep;\nvVisor = visor;\nvRegion = region;\nvMarker = marker;',
+      )
       .replace(
         '#include <project_vertex>',
-        '#include <project_vertex>\nvHeight = (modelMatrix * vec4(transformed, 1.0)).y;',
+        '#include <project_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;',
       );
-    shader.fragmentShader = `varying float vKeep;
+    shader.fragmentShader = `uniform vec3 uTrim;
+      uniform vec3 uMarkerLight;
+      uniform vec3 uRim;
+      uniform float uRimStrength;
+      uniform float uMarkers;
+      uniform float uSeams;
+      uniform float uVisor;
+      uniform float uLines;
+      uniform int uSeamCount;
+      uniform vec3 uSeamAt[${MAX_SEAMS}];
+      uniform vec3 uSeamNormal[${MAX_SEAMS}];
+      uniform float uSeamReach[${MAX_SEAMS}];
+      uniform int uSeamRegions[${MAX_SEAMS}];
+      uniform int uSeamSide[${MAX_SEAMS}];
+      varying float vKeep;
       varying float vVisor;
-      varying float vHeight;
+      flat varying float vRegion;
+      varying vec3 vMarker;
+      varying vec3 vWorld;
       ${shader.fragmentShader}`
       .replace(
         '#include <clipping_planes_fragment>',
@@ -58,10 +101,35 @@ function suitMaterial(): MeshStandardMaterial {
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
-        float visorMix = smoothstep(0.35, 0.65, vVisor);
-        float band = abs(fract(vHeight / 30.0 + 0.5) - 0.5) * 30.0;
-        float line = (1.0 - smoothstep(0.0, fwidth(vHeight) * 1.3, band)) * (1.0 - visorMix);
+        float visorMix = smoothstep(0.35, 0.65, vVisor) * uVisor;
+        float band = abs(fract(vWorld.y / 30.0 + 0.5) - 0.5) * 30.0;
+        float line = (1.0 - smoothstep(0.0, fwidth(vWorld.y) * 1.3, band)) * (1.0 - visorMix) * uLines;
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.8 + 0.03, line * 0.3);
+        if (uSeams > 0.5) {
+          int code = int(vRegion + 0.5);
+          int part = code >> 2;
+          int side = code & 3;
+          float sd = 1e4;
+          for (int k = 0; k < ${MAX_SEAMS}; k++) {
+            if (k >= uSeamCount) break;
+            if ((uSeamRegions[k] & (1 << part)) == 0) continue;
+            if (uSeamSide[k] != 0 && uSeamSide[k] != side) continue;
+            vec3 d = vWorld - uSeamAt[k];
+            if (length(d) > uSeamReach[k]) continue;
+            sd = min(sd, abs(dot(d, uSeamNormal[k])));
+          }
+          float seamMix = 1.0 - smoothstep(2.5, 2.5 + length(fwidth(vWorld)) * 1.2, sd);
+          diffuseColor.rgb = mix(diffuseColor.rgb, uTrim, seamMix);
+        }
+        if (uMarkers > 0.5 && vMarker.z > 0.5) {
+          float r = length(vMarker.xy);
+          float aa = max(fwidth(r), 0.001) * 1.2;
+          float qa = smoothstep(-aa, aa, vMarker.x);
+          float qb = smoothstep(-aa, aa, vMarker.y);
+          float dark = max(qa * qb + (1.0 - qa) * (1.0 - qb), smoothstep(0.84 - aa, 0.84, r));
+          vec3 target = mix(uMarkerLight, uTrim, dark);
+          diffuseColor.rgb = mix(diffuseColor.rgb, target, 1.0 - smoothstep(1.0 - aa, 1.0, r));
+        }
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.025, 0.028, 0.035), visorMix);
         if (!gl_FrontFacing) diffuseColor.rgb *= 0.45;`,
       )
@@ -73,7 +141,7 @@ function suitMaterial(): MeshStandardMaterial {
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
         float rim = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
-        totalEmissiveRadiance += vec3(0.88, 0.58, 0.2) * pow(rim, 4.0) * mix(0.4, 0.15, visorMix);`,
+        totalEmissiveRadiance += uRim * pow(rim, 4.0) * uRimStrength * (1.0 - 0.6 * visorMix);`,
       );
   };
   return mat;
@@ -87,6 +155,8 @@ export class Viewport {
   readonly world = new Group();
   private readonly rulers = new RulerLayer();
   private bodyMesh: Mesh<BufferGeometry, MeshStandardMaterial> | null = null;
+  private style: DummyStyle = parseDummyStyle(null);
+  private showRegions = false;
   private regionColors: Float32Array | null = null;
   private frameBox: Box3 | null = null;
   private needsRender = true;
@@ -233,20 +303,34 @@ export class Viewport {
     geom.setAttribute('color', new BufferAttribute(new Float32Array(n * 3).fill(1), 3));
     geom.setAttribute('keep', new BufferAttribute(new Float32Array(n).fill(1), 1));
     geom.setAttribute('visor', new BufferAttribute(new Float32Array(n), 1));
+    geom.setAttribute('region', new BufferAttribute(Float32Array.from(regions), 1));
+    geom.setAttribute('marker', new BufferAttribute(new Float32Array(n * 3), 3));
     geom.setIndex(new BufferAttribute(indices, 1));
-    this.bodyMesh = new Mesh(geom, suitMaterial());
+    this.bodyMesh = new Mesh(geom, dummyMaterial());
+    this.applyStyle();
     this.bodyMesh.name = 'mannequin';
     this.world.add(this.bodyMesh);
     this.requestRender();
   }
 
-  updateBody(shape: DummyShape): void {
+  updateBody(shape: DummyShape, joints: Record<string, Vec3>): void {
+    const seams = dummySeams(joints).slice(0, MAX_SEAMS);
+    const u = DUMMY_UNIFORMS;
+    u.uSeamCount.value = seams.length;
+    seams.forEach((seam, k) => {
+      u.uSeamAt.value[k].set(...seam.at);
+      u.uSeamNormal.value[k].set(...seam.normal);
+      u.uSeamReach.value[k] = seam.reach;
+      u.uSeamRegions.value[k] = seam.regions.reduce((m, r) => m | (1 << REGIONS.indexOf(r)), 0);
+      u.uSeamSide.value[k] = seam.side;
+    });
     if (!this.bodyMesh) return;
     const g = this.bodyMesh.geometry;
     for (const [name, data] of [
       ['position', shape.positions],
       ['normal', shape.normals],
       ['visor', shape.visor],
+      ['marker', shape.marker],
     ] as const) {
       (g.getAttribute(name) as BufferAttribute).copyArray(data).needsUpdate = true;
     }
@@ -278,7 +362,30 @@ export class Viewport {
     if (show) attr.copyArray(this.regionColors);
     else (attr.array as Float32Array).fill(1);
     attr.needsUpdate = true;
-    this.bodyMesh.material.color.set(show ? 0xffffff : SUIT);
+    this.showRegions = show;
+    this.applyStyle();
+  }
+
+  setDummyStyle(style: DummyStyle): void {
+    this.style = style;
+    this.applyStyle();
+  }
+
+  private applyStyle(): void {
+    const s = this.style;
+    const u = DUMMY_UNIFORMS;
+    u.uTrim.value.set(s.trim);
+    u.uMarkerLight.value.set(s.body).lerp(new Color(0xffffff), 0.12);
+    u.uRim.value.set(s.visor ? 0xe0a43a : 0xffffff);
+    u.uRimStrength.value = s.visor ? 0.4 : 0.18;
+    u.uMarkers.value = s.markers ? 1 : 0;
+    u.uSeams.value = s.seams ? 1 : 0;
+    u.uVisor.value = s.visor ? 1 : 0;
+    u.uLines.value = s.lines ? 1 : 0;
+    if (this.bodyMesh) {
+      this.bodyMesh.material.color.set(this.showRegions ? 0xffffff : s.body);
+      this.bodyMesh.material.roughness = 0.85 - 0.7 * s.gloss;
+    }
     this.requestRender();
   }
 

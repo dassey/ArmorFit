@@ -90,9 +90,12 @@ Guidelines:
   millimetres internally. The wearing frame is Y up, Z towards the wearer's
   front, X towards the wearer's left.
 
-The mannequin is shown as a fitting dummy: a graphite suit with contour lines
-every 3 cm and a visor over a smoothed face. That is display only; fit analysis,
-rulers and exports use the true body surface.
+The mannequin is a dummy with a smooth face. **Dummy** in the 3D view lets you
+make your own: start from the crash-test look (yellow, joint seams, black and
+yellow target markers), the fitting suit (graphite, contour lines, face visor)
+or the showroom white, then pick your own colours, gloss and details. It is
+saved in your browser and only changes the look; fit analysis, rulers and
+exports use the true body surface.
 
 ## Limitations
 
