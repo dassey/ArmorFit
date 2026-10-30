@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { Matrix4 } from 'three';
 import { parseBodyAsset } from '../core/body/asset';
+import { DummyLook, type DummyShape } from '../core/body/dummy';
 import { MannequinBuilder, type Mannequin } from '../core/body/mannequin';
 import type { LoopEdges } from '../core/body/rulers';
 import {
@@ -18,6 +19,7 @@ import type { MeasurementProfile } from '../core/measurements/profile';
 import { expose, transfer } from './rpc';
 
 let builder: MannequinBuilder | null = null;
+let dummy: DummyLook | null = null;
 let query: BodyQuery | null = null;
 let topology: { indices: Uint16Array; regions: Uint8Array } | null = null;
 const analysisPieces = new Map<string, AnalysisPiece>();
@@ -32,6 +34,8 @@ export interface BodyMeta {
 export interface BodyUpdate {
   positions: Float32Array;
   normals: Float32Array;
+  /** The mannequin as displayed (fitting dummy). */
+  display: DummyShape;
   joints: Mannequin['joints'];
   landmarks: Mannequin['landmarks'];
   measured: Mannequin['measured'];
@@ -47,6 +51,7 @@ const api = {
     if (!res.ok) throw new Error(`Could not load the mannequin (${res.status})`);
     const asset = parseBodyAsset(new Uint8Array(await res.arrayBuffer()));
     builder = new MannequinBuilder(asset);
+    dummy = new DummyLook(asset.indices, asset.regions);
     topology = { indices: asset.indices, regions: asset.regions };
     const indices = asset.indices.slice();
     const regions = asset.regions.slice();
@@ -68,17 +73,25 @@ const api = {
     const m = builder.build(profile);
     const qp = m.positions.slice();
     const qn = m.normals.slice();
+    const display = dummy!.shape(m.positions);
     if (!query) query = new BodyQuery(qp, qn, topology.indices, topology.regions);
     else query.update(qp, qn);
     return transfer(
       {
         positions: m.positions,
         normals: m.normals,
+        display,
         joints: m.joints,
         landmarks: m.landmarks,
         measured: m.measured,
       },
-      [m.positions.buffer, m.normals.buffer],
+      [
+        m.positions.buffer,
+        m.normals.buffer,
+        display.positions.buffer,
+        display.normals.buffer,
+        display.visor.buffer,
+      ] as ArrayBuffer[],
     );
   },
 

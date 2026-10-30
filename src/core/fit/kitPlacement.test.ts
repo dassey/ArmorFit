@@ -113,8 +113,8 @@ describe('kitPlacements', () => {
 
   it('turns T-pose arm pieces onto the arm and keeps tubes on their limb', () => {
     const { spec, pos } = worldOf('p4');
-    expect(spec.t).toBeGreaterThanOrEqual(0.15);
-    expect(spec.t).toBeLessThanOrEqual(0.85);
+    expect(spec.t).toBeGreaterThanOrEqual(0.15 - 1e-9);
+    expect(spec.t).toBeLessThanOrEqual(0.85 + 1e-9);
     const b = body.bones.forearmL;
     const onAxis = pointOnBone(b, spec.t);
     expect(v3.dist([pos.x, pos.y, pos.z], onAxis)).toBeLessThan(40);

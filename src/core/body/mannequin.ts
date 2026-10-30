@@ -1,5 +1,6 @@
 import { v3, type Vec3 } from '../math/linalg';
 import { computeVertexNormals } from '../mesh/normals';
+import { estimateMeasurements } from '../measurements/estimate';
 import type { MeasurementProfile } from '../measurements/profile';
 import { knownKeys } from '../measurements/profile';
 import { MEASUREMENT_KEYS, type MeasurementKey, type Measurements } from '../measurements/schema';
@@ -19,7 +20,31 @@ export interface Mannequin {
   params: BodyParams;
 }
 
-const GENDER = { neutral: 0.5, masculine: 1, feminine: 0 } as const;
+/**
+ * MakeHuman gender for a profile. "Neutral" takes the sex the measurements point to (ANSUR II), pushed
+ * firmly to one side: a half-and-half blend reads as neither.
+ */
+export function bodyGender(profile: MeasurementProfile): number {
+  if (profile.preset === 'masculine') return 1;
+  if (profile.preset === 'feminine') return 0;
+  const known: Partial<Measurements> = {};
+  for (const k of knownKeys(profile)) known[k] = profile.values[k];
+  if (!Object.keys(known).length) return 0.5;
+  const w = estimateMeasurements(known, 'neutral').masculineWeight;
+  return 1 / (1 + Math.exp(-(w - 0.5) * 14));
+}
+
+/**
+ * Where the measurements leave it open: men lean muscular and lean, women softer with a fuller bust, and an
+ * undecided body stays flat-chested like a dress form.
+ */
+export function bodyBuild(gender: number): { muscle: number; weight: number; cup: number } {
+  return {
+    muscle: 0.42 + 0.3 * gender,
+    weight: 0.5 - 0.1 * gender,
+    cup: Math.max(0.1, 0.6 - 1.2 * gender),
+  };
+}
 
 export function solveTargets(profile: MeasurementProfile): Partial<Record<MeasurementKey, SolveTarget>> {
   const known = new Set(knownKeys(profile));
@@ -42,9 +67,9 @@ export class MannequinBuilder {
   }
 
   build(profile: MeasurementProfile): Mannequin {
-    const gender = GENDER[profile.preset];
+    const gender = Math.round(bodyGender(profile) * 100) / 100;
     const initial = this.last && this.last.macro.gender === gender ? this.last : undefined;
-    const res = this.solver.solve(solveTargets(profile), { gender, initial });
+    const res = this.solver.solve(solveTargets(profile), { gender, build: bodyBuild(gender), initial });
     this.last = res.params;
     return this.fromParams(res.params, res.measured);
   }

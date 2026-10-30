@@ -82,13 +82,21 @@ function drawPhoto(
   const s = Math.max(src.width, src.height) / 640;
   const mask = slot.view?.mask;
   if (mask && mask.width === src.width && mask.height === src.height) {
+    // Dim everything but the person and trace their outline.
     const img = g.getImageData(0, 0, src.width, src.height);
     const d = img.data;
-    for (let i = 0, n = mask.width * mask.height; i < n; i++) {
-      if (mask.data[i] < 0.5) continue;
-      d[i * 4] = d[i * 4] * 0.7 + 224 * 0.3;
-      d[i * 4 + 1] = d[i * 4 + 1] * 0.7 + 164 * 0.3;
-      d[i * 4 + 2] = d[i * 4 + 2] * 0.7 + 58 * 0.3;
+    const w = mask.width;
+    const on = (i: number) => mask.data[i] >= 0.5;
+    for (let i = 0, n = w * mask.height; i < n; i++) {
+      if (!on(i)) {
+        d[i * 4] *= 0.45;
+        d[i * 4 + 1] *= 0.45;
+        d[i * 4 + 2] *= 0.45;
+      } else if (!on(i - 1) || !on(i + 1) || !on(i - w) || !on(i + w)) {
+        d[i * 4] = 255;
+        d[i * 4 + 1] = 211;
+        d[i * 4 + 2] = 138;
+      }
     }
     g.putImageData(img, 0, 0);
   }

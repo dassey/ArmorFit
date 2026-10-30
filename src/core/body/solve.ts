@@ -11,6 +11,8 @@ export interface SolveTarget {
 
 export interface SolveOptions {
   gender: number;
+  /** Preferred build where the measurements leave it open (MakeHuman macro values, 0..1). */
+  build?: Partial<Record<'muscle' | 'weight' | 'cup', number>>;
   maxIterations?: number;
   initial?: BodyParams;
 }
@@ -123,7 +125,10 @@ export class BodySolver {
     const nT = this.asset.targets.length;
     const csr = this.morpher.slotTargets();
 
-    let x = opts.initial ? this.fromParams(opts.initial) : Float64Array.from(this.unknowns, (u) => u.prior);
+    const prior = this.unknowns.map((u) =>
+      u.kind === 'macro' ? (opts.build?.[u.key as 'muscle' | 'weight' | 'cup'] ?? u.prior) : u.prior,
+    );
+    let x = opts.initial ? this.fromParams(opts.initial) : Float64Array.from(prior);
     for (let j = 1; j <= 3; j++) if (x[j] === 0.5) x[j] = 0.5005;
     if (!opts.initial && targets.height) {
       const h0 = this.measureParams(this.toParams(x, opts.gender)).height!;
@@ -136,7 +141,7 @@ export class BodySolver {
     const residualsOf = (xv: Float64Array, measured: Partial<Record<MeasurementKey, number>>) => {
       const r = new Float64Array(m + n);
       keys.forEach((k, i) => (r[i] = (measured[k]! - targets[k]!.value) / targets[k]!.tolerance));
-      this.unknowns.forEach((u, j) => (r[m + j] = (xv[j] - u.prior) / u.sigma));
+      this.unknowns.forEach((u, j) => (r[m + j] = (xv[j] - prior[j]) / u.sigma));
       return r;
     };
     const costOf = (r: Float64Array) => r.reduce((s, v) => s + v * v, 0);

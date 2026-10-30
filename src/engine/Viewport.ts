@@ -6,7 +6,7 @@ import {
   BufferAttribute,
   BufferGeometry,
   CircleGeometry,
-  Color,
+  RingGeometry,
   DirectionalLight,
   DoubleSide,
   FrontSide,
@@ -23,24 +23,57 @@ import {
   CanvasTexture,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import type { DummyShape } from '../core/body/dummy';
 import { regionColor } from '../core/body/regions';
 import type { Vec3 } from '../core/math/linalg';
 import { RulerLayer, type RulerDraw } from './Rulers';
 
-function withKeepMask(mat: MeshStandardMaterial): MeshStandardMaterial {
+const SUIT = 0x4b525e;
+
+// The mannequin wears a fitting suit: graphite fabric, tailor's contour lines every 3 cm of height, a dark glossy
+// visor over the face and a warm rim light. Hidden body parts (one-part views) are discarded; back faces show
+// darker through the cut.
+function suitMaterial(): MeshStandardMaterial {
+  const mat = new MeshStandardMaterial({ color: SUIT, roughness: 0.62, metalness: 0.05, vertexColors: true });
   mat.onBeforeCompile = (shader) => {
-    shader.vertexShader = `attribute float keep;\nvarying float vKeep;\n${shader.vertexShader}`.replace(
-      '#include <begin_vertex>',
-      '#include <begin_vertex>\nvKeep = keep;',
-    );
-    shader.fragmentShader = `varying float vKeep;\n${shader.fragmentShader}`
+    shader.vertexShader = `attribute float keep;
+      attribute float visor;
+      varying float vKeep;
+      varying float vVisor;
+      varying float vHeight;
+      ${shader.vertexShader}`
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvKeep = keep;\nvVisor = visor;')
+      .replace(
+        '#include <project_vertex>',
+        '#include <project_vertex>\nvHeight = (modelMatrix * vec4(transformed, 1.0)).y;',
+      );
+    shader.fragmentShader = `varying float vKeep;
+      varying float vVisor;
+      varying float vHeight;
+      ${shader.fragmentShader}`
       .replace(
         '#include <clipping_planes_fragment>',
         '#include <clipping_planes_fragment>\nif (vKeep < 0.0) discard;',
       )
       .replace(
         '#include <color_fragment>',
-        '#include <color_fragment>\nif (!gl_FrontFacing) diffuseColor.rgb *= 0.45;',
+        `#include <color_fragment>
+        float visorMix = smoothstep(0.35, 0.65, vVisor);
+        float band = abs(fract(vHeight / 30.0 + 0.5) - 0.5) * 30.0;
+        float line = (1.0 - smoothstep(0.0, fwidth(vHeight) * 1.3, band)) * (1.0 - visorMix);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.8 + 0.03, line * 0.3);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.025, 0.028, 0.035), visorMix);
+        if (!gl_FrontFacing) diffuseColor.rgb *= 0.45;`,
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.28, visorMix);',
+      )
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        float rim = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
+        totalEmissiveRadiance += vec3(0.88, 0.58, 0.2) * pow(rim, 4.0) * mix(0.4, 0.15, visorMix);`,
       );
   };
   return mat;
@@ -73,13 +106,13 @@ export class Viewport {
     this.renderer.domElement.setAttribute('aria-label', '3D view of the mannequin and armor');
     container.appendChild(this.renderer.domElement);
 
-    this.scene.background = new Color(0x1b1e24);
+    this.scene.background = this.makeBackdrop();
     this.scene.add(this.world);
-    this.scene.add(new HemisphereLight(0xf2f4ff, 0x30302c, 1.4));
-    const key = new DirectionalLight(0xffffff, 2.2);
+    this.scene.add(new HemisphereLight(0xf2f4ff, 0x30302c, 1.6));
+    const key = new DirectionalLight(0xffffff, 2.6);
     key.position.set(1500, 3000, 2500);
     this.scene.add(key);
-    const rim = new DirectionalLight(0x9fb8ff, 0.9);
+    const rim = new DirectionalLight(0x9fb8ff, 1.4);
     rim.position.set(-2500, 1500, -2500);
     this.scene.add(rim);
     this.scene.add(this.makeFloor());
@@ -102,7 +135,41 @@ export class Viewport {
     this.loop();
   }
 
-  private makeFloor(): Mesh {
+  private makeBackdrop(): CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d')!;
+    const g = ctx.createLinearGradient(0, 0, 0, 256);
+    g.addColorStop(0, '#272c35');
+    g.addColorStop(0.62, '#1c1f26');
+    g.addColorStop(1, '#121418');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 256);
+    const tex = new CanvasTexture(canvas);
+    tex.colorSpace = SRGBColorSpace;
+    return tex;
+  }
+
+  private makeFloor(): Group {
+    const floor = new Group();
+    floor.add(this.makeShadow());
+    for (const [r, opacity] of [
+      [520, 0.55],
+      [560, 0.18],
+    ] as const) {
+      const ring = new Mesh(
+        new RingGeometry(r - 4, r, 96),
+        new MeshBasicMaterial({ color: 0xe0a43a, transparent: true, opacity, depthWrite: false }),
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 1;
+      floor.add(ring);
+    }
+    return floor;
+  }
+
+  private makeShadow(): Mesh {
     const size = 256;
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = size;
@@ -165,26 +232,24 @@ export class Viewport {
     for (let i = 0; i < n; i++) this.regionColors.set(regionColor(regions[i]), i * 3);
     geom.setAttribute('color', new BufferAttribute(new Float32Array(n * 3).fill(1), 3));
     geom.setAttribute('keep', new BufferAttribute(new Float32Array(n).fill(1), 1));
+    geom.setAttribute('visor', new BufferAttribute(new Float32Array(n), 1));
     geom.setIndex(new BufferAttribute(indices, 1));
-    const mat = withKeepMask(
-      new MeshStandardMaterial({
-        color: 0xcfc6ba,
-        roughness: 0.68,
-        metalness: 0,
-        vertexColors: true,
-      }),
-    );
-    this.bodyMesh = new Mesh(geom, mat);
+    this.bodyMesh = new Mesh(geom, suitMaterial());
     this.bodyMesh.name = 'mannequin';
     this.world.add(this.bodyMesh);
     this.requestRender();
   }
 
-  updateBody(positions: Float32Array, normals: Float32Array): void {
+  updateBody(shape: DummyShape): void {
     if (!this.bodyMesh) return;
     const g = this.bodyMesh.geometry;
-    (g.getAttribute('position') as BufferAttribute).copyArray(positions).needsUpdate = true;
-    (g.getAttribute('normal') as BufferAttribute).copyArray(normals).needsUpdate = true;
+    for (const [name, data] of [
+      ['position', shape.positions],
+      ['normal', shape.normals],
+      ['visor', shape.visor],
+    ] as const) {
+      (g.getAttribute(name) as BufferAttribute).copyArray(data).needsUpdate = true;
+    }
     g.computeBoundingBox();
     g.computeBoundingSphere();
     if (!this.framed || (this.autoFrame && !this.inView())) {
@@ -213,7 +278,7 @@ export class Viewport {
     if (show) attr.copyArray(this.regionColors);
     else (attr.array as Float32Array).fill(1);
     attr.needsUpdate = true;
-    this.bodyMesh.material.color.set(show ? 0xffffff : 0xcfc6ba);
+    this.bodyMesh.material.color.set(show ? 0xffffff : SUIT);
     this.requestRender();
   }
 

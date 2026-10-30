@@ -197,7 +197,7 @@ export class AppController {
       this.lastBuilt = p;
       this.shape = update;
       this.updateMask();
-      this.viewport?.updateBody(update.positions, update.normals);
+      this.viewport?.updateBody(update.display);
       if (this.topology) {
         if (!this.query) {
           this.query = new BodyQuery(
