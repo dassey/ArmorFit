@@ -7,6 +7,7 @@ import {
   recomputeProfile,
   serializeProfile,
   setMeasurement,
+  setMeasurements,
   type MeasurementProfile,
 } from '../core/measurements/profile';
 import type {
@@ -87,10 +88,24 @@ export const view = {
   showRegions: signal(false),
   showHeatmap: signal(true),
   armorOpacity: signal(1),
+  photoSizer: signal(false),
   toasts: signal<{ id: number; text: string; kind: 'info' | 'error' }[]>([]),
 };
 
 effect(() => safeSave(PART_KEY, view.part.value));
+
+const PHOTO_KEY = 'armorfit:photo-sized:v1';
+/** When the measurements last came from photos (ISO date), or null. */
+export const photoSized = signal<string | null>(safeLoad(PHOTO_KEY));
+effect(() => {
+  const v = photoSized.value;
+  if (v) safeSave(PHOTO_KEY, v);
+  else {
+    try {
+      localStorage.removeItem(PHOTO_KEY);
+    } catch {}
+  }
+});
 effect(() => safeSave(RULERS_KEY, JSON.stringify(view.rulers.value)));
 
 export const visibleMeasurements = computed(() => partMeasurements(view.part.value, profile.value.mode));
@@ -156,6 +171,9 @@ export const measurementActions = {
   set(key: MeasurementKey, mm: number) {
     profile.value = setMeasurement(profile.value, key, mm);
   },
+  setMany(values: Partial<Measurements>) {
+    profile.value = setMeasurements(profile.value, values);
+  },
   clear(key: MeasurementKey) {
     profile.value = clearMeasurement(profile.value, key);
   },
@@ -173,6 +191,7 @@ export const measurementActions = {
   },
   resetAll() {
     profile.value = { ...newProfile(), displayUnit: profile.value.displayUnit };
+    photoSized.value = null;
   },
   importJson(text: string) {
     profile.value = parseProfile(text);

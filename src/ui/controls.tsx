@@ -43,7 +43,7 @@ export function NumberField(props: {
   }, [props.value, props.decimals]);
   const commit = (raw: string) => {
     const v = parseFloat(raw.replace(',', '.'));
-    if (Number.isFinite(v) && v > 0 && Math.abs(v - props.value) > 1e-9) props.onCommit(v);
+    if (Number.isFinite(v) && v > 0 && !(Math.abs(v - props.value) <= 1e-9)) props.onCommit(v);
     else setText(fmt(props.value));
   };
   return (

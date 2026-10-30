@@ -82,13 +82,15 @@ src/
                           body parts (one-part views), measurement rulers
     pieces/               piece types, file-name classifier, unit guess, auto-orientation, prepare pipeline
     fit/                  body query (BVH), clearance, region tally, placement & home anchors, settle, auto-size, heatmap
+    photo/                photo sizing: silhouette widths and depths, tape levels, calibration
     print/                printer presets, build-volume check
     export/               transform baking, sizing report, project file
     testmeshes/           procedural helmet / chest plate / pauldron / forearm tube
   workers/                rpc.ts, geometry.worker.ts, fit.worker.ts
-  engine/                 Viewport (scene, camera, lights), PieceView, Interaction (drag, twist, touch), Rulers
+  engine/                 Viewport (scene, camera, lights), PieceView, Interaction (drag, twist, touch), Rulers,
+                          PoseDetector (MediaPipe pose landmarks + person mask, loaded on demand)
   state/                  store (signals), pieces, pieceManager (placement actions), analysis, controller, project
-  ui/                     App, MeasurementsPanel, ArmorPanel, FitPanel, PrintPanel, controls
+  ui/                     App, MeasurementsPanel, PhotoSizer, ArmorPanel, FitPanel, PrintPanel, controls
   main.tsx, styles.css, version.ts
 docs/RESEARCH.md
 ```
@@ -175,6 +177,18 @@ space, mm, feet at y = 0, facing +Z). Exports convert Y-up → Z-up for slicers.
 - [x] Browser smoke tests in CI (Playwright: demo fit and auto-size, every export, STL import, phone layout)
 - [x] Measurement sliders with live mannequin updates, one-part views (helmet, chest and back, shoulders, arms,
       hands, waist and hips, legs, feet) and on-body measurement rulers
+
+### Photo sizing
+
+- [x] Measure from a front and a side photo: MediaPipe Pose Landmarker (on device, model served with the
+      app) gives a person mask and landmarks; the height sets the scale; tapes sit at fixed fractions of
+      height; circumference = calibrated ellipse of front width × side depth; lengths from landmarks
+- [x] Calibrated on rendered MakeHuman mannequins through the real model (`scripts/calibrate-photo.mjs`);
+      held-out bodies: chest and head about 1 %, most others 2–3 %
+- [x] Results drawn on the photos, per-measurement opt-out, self-timer camera, plain-language problems
+      (arms against the body, a second front photo, cut-off head or feet)
+- Calibrate on real people with tape-measured sizes; child body model (MakeHuman child targets, child
+  anthropometry) so kids under 130 cm can be sized
 
 ### Phase 2
 

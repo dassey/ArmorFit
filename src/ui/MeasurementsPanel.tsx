@@ -21,6 +21,7 @@ import {
   visibleMeasurements,
 } from '../state/store';
 import { Button, download, HelpTip, NumberField, pickFiles, Segmented } from './controls';
+import { PhotoSizerCard } from './PhotoSizer';
 
 const GROUP_ORDER: MeasurementGroup[] = ['Overall', 'Head & neck', 'Torso', 'Arms', 'Hands', 'Legs & feet'];
 
@@ -219,6 +220,7 @@ export function MeasurementsPanel() {
   return (
     <section class="panel-section" aria-labelledby="measure-title">
       <h2 id="measure-title">Your measurements</h2>
+      <PhotoSizerCard />
       <PartPicker />
       <div class="row wrap gap">
         {!focused && (

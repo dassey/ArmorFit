@@ -1,0 +1,10 @@
+pose_landmarker_full.task
+
+MediaPipe Pose Landmarker (full), float16, version 1, by Google.
+Licensed under the Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
+Model card and documentation: https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker
+Downloaded unmodified from:
+https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task
+SHA-256: 5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1
+
+ArmorFit serves it with the app so photos can be measured without contacting any other server.

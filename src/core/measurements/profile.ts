@@ -46,9 +46,14 @@ export function newProfile(): MeasurementProfile {
 }
 
 export function setMeasurement(p: MeasurementProfile, key: MeasurementKey, mm: number): MeasurementProfile {
-  const userSet = p.userSet.includes(key) ? p.userSet : [...p.userSet, key];
-  const mode = QUICK_KEYS.includes(key) ? p.mode : 'detailed';
-  return recomputeProfile({ ...p, mode, userSet, values: { ...p.values, [key]: mm } });
+  return setMeasurements(p, { [key]: mm });
+}
+
+export function setMeasurements(p: MeasurementProfile, values: Partial<Measurements>): MeasurementProfile {
+  const keys = (Object.keys(values) as MeasurementKey[]).filter((k) => MEASUREMENT_KEYS.includes(k));
+  const userSet = [...p.userSet, ...keys.filter((k) => !p.userSet.includes(k))];
+  const mode = keys.every((k) => QUICK_KEYS.includes(k)) ? p.mode : 'detailed';
+  return recomputeProfile({ ...p, mode, userSet, values: { ...p.values, ...values } });
 }
 
 export function clearMeasurement(p: MeasurementProfile, key: MeasurementKey): MeasurementProfile {

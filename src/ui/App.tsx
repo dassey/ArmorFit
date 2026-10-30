@@ -2,10 +2,11 @@ import { useEffect, useRef } from 'preact/hooks';
 import { BODY_PARTS, type BodyPartId } from '../core/body/parts';
 import { Viewport } from '../engine/Viewport';
 import type { AppController } from '../state/controller';
-import { body, view, type Tab } from '../state/store';
+import { body, photoSized, profile, view, type Tab } from '../state/store';
 import { ArmorPanel } from './ArmorPanel';
 import { FitPanel, HeatmapLegend } from './FitPanel';
 import { MeasurementsPanel } from './MeasurementsPanel';
+import { PhotoSizer } from './PhotoSizer';
 import { PrintPanel } from './PrintPanel';
 
 const TABS: { id: Tab; label: string }[] = [
@@ -61,6 +62,11 @@ function ViewportOverlay({ viewport }: { viewport: () => Viewport | null }) {
           ⟲ View
         </button>
       </div>
+      {profile.value.userSet.length === 0 && !photoSized.value && !view.photoSizer.value && (
+        <button type="button" class="btn primary vp-cta" onClick={() => (view.photoSizer.value = true)}>
+          📷 Size the mannequin to you
+        </button>
+      )}
     </div>
   );
 }
@@ -152,10 +158,12 @@ export function App({ controller }: { controller: AppController }) {
             {tab === 'print' && <PrintPanel controller={controller} />}
           </div>
           <footer class="credits">
-            Mannequin: MakeHuman (CC0). Body statistics: ANSUR II (US Army, public release).
+            Mannequin: MakeHuman (CC0). Body statistics: ANSUR II (US Army, public release). Photo sizing:
+            MediaPipe (Apache 2.0).
           </footer>
         </aside>
       </main>
+      <PhotoSizer />
       <Toasts />
     </div>
   );

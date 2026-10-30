@@ -5,8 +5,11 @@ in the browser. Enter a few measurements, drop in your armor files (STL, OBJ or
 3MF), put the pieces on a mannequin built to your size, see where they are
 tight or loose, let ArmorFit scale them, and export print-ready files.
 
-- **100 % client-side.** Your files and measurements never leave your device:
-  no server, no account, no upload. Measurements are saved in your browser only.
+- **No tape measure needed.** Two photos (front and side) and your height give
+  13 measurements, found on your device by an on-device body detector.
+- **100 % client-side.** Your files, photos and measurements never leave your
+  device: no server, no account, no upload. Measurements are saved in your
+  browser only.
 - **Works on desktop and phones** (touch: drag, two-finger twist, pinch zoom).
 - **Handles real files:** pieces up to about 500k triangles, broken and
   non-manifold meshes, files in mm, cm, m or inches, and reduced-scale files.
@@ -18,6 +21,13 @@ tight or loose, let ArmorFit scale them, and export print-ready files.
    feet. For one part, the Body tab shows only the measurements that size it
    and the viewport shows only that part of the mannequin, close up. Armor on
    other parts is hidden until you go back to the full body.
+   **No tape measure?** Press **Measure me with photos**, enter your height and
+   add a front and a side photo: snug clothes, barefoot, arms out like an "A",
+   head to toe in the picture (a grown-up can take them for kids, or use the
+   10-second self-timer). ArmorFit finds you in each photo and measures your
+   chest, waist, hips, head, shoulders, arms and legs, draws each measurement
+   on the photo, and lets you pick which ones to use. Photo sizes are usually
+   within 2–4 cm; check the key measurement of a snug piece with a tape.
    Choose cm or inches and enter your measurements: drag a slider to watch the
    mannequin reshape, or type an exact value. Quick mode asks for your height,
    chest, waist and head circumference and estimates the other 18 measurements
@@ -72,6 +82,10 @@ Guidelines:
   when sources disagree.
 - **Piece types** (label, regions, driving measurements, typical size,
   file-name keywords) live in `src/core/pieces/types.ts`.
+- **Photo sizing:** `src/core/photo/` measures a person mask and pose
+  landmarks; `src/engine/PoseDetector.ts` gets them from MediaPipe. The
+  calibration constants come from `node scripts/calibrate-photo.mjs`, which
+  photographs rendered mannequins and runs them through the same pipeline.
 - **Style:** Prettier (single quotes, 110 columns) and ESLint. All lengths are
   millimetres internally. The wearing frame is Y up, Z towards the wearer's
   front, X towards the wearer's left.
@@ -85,6 +99,10 @@ Guidelines:
   per-axis scales close to each other on parts with snug features.
 - Oversized pieces are flagged but not split. Use your slicer's cut tool until
   automatic splitting with alignment pins lands.
+- Photo sizing is calibrated on rendered mannequins, not yet on a panel of
+  real people. Loose clothes, big hair, shoes or arms against the body make it
+  less accurate; neck, bicep, forearm, wrist, hand and foot sizes still come
+  from the body survey.
 - Fit is only as good as the measurements. Before a long print, cut a thin
   test ring from a snug piece in your slicer and try it on.
 
@@ -98,6 +116,9 @@ ArmorFit is released under the [MIT licence](LICENSE).
 - Body statistics:
   [ANSUR II](https://www.openlab.psu.edu/ansur2/) anthropometric survey (US
   Army, 2012), cleared for unlimited public release.
+- Photo sizing: [MediaPipe](https://github.com/google-ai-edge/mediapipe) Pose
+  Landmarker model and Tasks Vision runtime, Apache 2.0 (see
+  [`public/assets/models/NOTICE.txt`](public/assets/models/NOTICE.txt)).
 - Libraries: [three.js](https://threejs.org/),
   [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh),
   [meshoptimizer](https://github.com/zeux/meshoptimizer),
